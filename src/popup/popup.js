@@ -243,15 +243,15 @@ async function runDailyMaintenance(problemMap, now) {
         console.log('[Popup] Reinforcement setup: queued', count, 'weak problems');
     }
 
-    if (plan.capacityDate !== todayKey || !(Number(plan.capacity) > 0)) {
+    if (plan.budgetDate !== todayKey || !plan.budget) {
         const fixed = Number(settings.dailyProblems) > 0;
-        plan.capacity = LB.computeCapacity(map, now, settings, {}, fixed ? 0 : plan.autoCapacity);
-        if (!fixed) plan.autoCapacity = plan.capacity;
-        plan.capacityDate = todayKey;
+        plan.budget = LB.dailyBudget(map, now, settings, fixed ? 0 : plan.autoTotal);
+        if (!fixed) plan.autoTotal = plan.budget.total;
+        plan.budgetDate = todayKey;
     }
 
     if (plan.admittedDate !== todayKey) {
-        const { admit } = LB.chooseAdmissions(map, plan.capacity);
+        const { admit } = LB.chooseAdmissions(map, plan.budget.reviewCapacity);
         if (admit.length) {
             map = { ...map };
             for (const slug of admit) map[slug] = R.admitQueued(map[slug], now);
@@ -313,23 +313,28 @@ async function buildTodayQueues(problemMap, now) {
     const stored = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null, leaveDays: [] });
     const planState = stored.reviewPlan && typeof stored.reviewPlan === 'object' ? stored.reviewPlan : {};
     const settings = stored.reviewSettings || {};
-    let capacity = planState.capacityDate === LB.toKey(now) ? Number(planState.capacity) : NaN;
-    if (!Number.isFinite(capacity) || capacity <= 0) {
-        capacity = LB.computeCapacity(problemMap, now, settings);
+    const todayKey = LB.toKey(now);
+    let budget = planState.budgetDate === todayKey && planState.budget ? { ...planState.budget } : LB.dailyBudget(problemMap, now, settings);
+    // The mode or a fixed total may have changed since the budget was frozen today.
+    if (budget.mode !== (settings.mode === 'grind' ? 'grind' : 'learn') || (Number(settings.dailyProblems) > 0 && budget.total !== Number(settings.dailyProblems))) {
+        budget = LB.dailyBudget(problemMap, now, settings, Number(settings.dailyProblems) > 0 ? 0 : planState.autoTotal);
     }
-    const sprint = activeSprint(settings, LB.toKey(now));
+    const sprint = activeSprint(settings, todayKey);
     if (sprint) {
-        capacity = Number(sprint.dailyProblems) > 0
-            ? LB.computeCapacity(problemMap, now, { dailyProblems: Number(sprint.dailyProblems) })
-            : capacity * 2;
+        // Sprint = reviews only: the whole (larger) day goes to going through everything.
+        const total = Number(sprint.dailyProblems) > 0 ? Number(sprint.dailyProblems) : budget.total * 2;
+        budget = { ...budget, total, newQuota: 0, reviewQuota: total, reviewCapacity: Math.max(1, Math.round(total * budget.avgWeight)) };
     }
+    const choice = planState.dayChoice && planState.dayChoice.date === todayKey ? planState.dayChoice : {};
 
     const plan = LB.planReviews(problemMap, {
         today: now,
         leaveDays: stored.leaveDays,
-        capacity,
+        capacity: budget.reviewCapacity,
         weakTopics: planState.weakTopics || [],
-        sprint: sprint ? { start: sprint.start, end: sprint.until } : null
+        sprint: sprint ? { start: sprint.start, end: sprint.until } : null,
+        includeAllDueToday: choice.overflow === 'include',
+        fillTodayFromSoon: choice.spare === 'pull'
     });
     const isIntensive = (p) => p.reinforce && p.reinforce.mode === 'intensive';
     const nowList = [];
@@ -344,16 +349,11 @@ async function buildTodayQueues(problemMap, now) {
     nowList.sort((a, b) => (isIntensive(b) ? 1 : 0) - (isIntensive(a) ? 1 : 0));
     later.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
 
-    const avgWeight = LB.averageWeight(problemMap);
-    const advice = LB.newProblemAdvice({
-        capacity: plan.capacity,
-        projected: LB.projectedDailyLoad(problemMap),
-        doneLoad: plan.doneLoad,
-        plannedLoad: plan.plannedRegularLoad,
-        deferredLoad: plan.deferredLoad,
-        avgWeight,
-        queuedCount: all.filter(p => p.reinforce && p.reinforce.mode === 'queued').length
-    });
+    const done = LB.doneToday(problemMap, now);
+    const plannedReviews = nowList.filter(p => !isIntensive(p)).length;
+    // Review room left today (in problems), and whether the user gives it to new problems.
+    const spareSlots = plan.deferredCount > 0 ? 0 : Math.max(0, budget.reviewQuota - done.reviewCount - plannedReviews);
+    const newQuota = budget.newQuota + (choice.spare === 'new' ? spareSlots : 0);
 
     const R = getReinforcement();
     const TM = getTopicMastery();
@@ -365,19 +365,26 @@ async function buildTodayQueues(problemMap, now) {
         now: nowList,
         later,
         summary: {
+            mode: budget.mode,
+            total: budget.total,
+            budgetSource: budget.source,
+            newDone: done.newCount,
+            newQuota,
+            reviewDone: done.reviewCount,
+            reviewQuota: budget.reviewQuota,
+            plannedReviews,
+            overflow: choice.overflow ? 0 : plan.deferredCount,
+            overflowChosen: choice.overflow || null,
+            spareSlots: choice.spare ? 0 : (plan.soonCount > 0 || spareSlots > 0 ? spareSlots : 0),
+            spareChosen: choice.spare || null,
+            soonCount: plan.soonCount,
             mastered: R ? all.filter(p => R.isMastered(p)).length : 0,
             weakTopics: mastery ? mastery.topics.filter(t => t.status === 'weak') : [],
             overallRate: mastery ? mastery.overall : null,
             sprint: sprint ? { until: sprint.until, daysLeft: Math.max(0, LB.dayIndex(new Date(`${sprint.until}T12:00:00`), now)), left: plan.sprintLeft } : null,
-            capacity: plan.capacity,
-            capacityProblems: Math.max(1, Math.round(plan.capacity / avgWeight)),
-            doneLoad: plan.doneLoad,
-            plannedLoad: plan.plannedRegularLoad,
-            deferredCount: plan.deferredCount,
             intensiveCount: all.filter(isIntensive).length,
             queuedCount: all.filter(p => p.reinforce && p.reinforce.mode === 'queued').length,
             isLeaveDay: plan.days[0].leave,
-            advice,
             fixedBudget: Number(stored.reviewSettings && stored.reviewSettings.dailyProblems) > 0
         }
     };
@@ -385,35 +392,92 @@ async function buildTodayQueues(problemMap, now) {
 
 function renderPlanStatus() {
     const el = document.getElementById('plan-status');
+    const choiceEl = document.getElementById('plan-choice');
     if (!el) return;
     const s = currentPlanSummary;
     if (!s || currentView !== 'dashboard') {
         el.style.display = 'none';
+        if (choiceEl) choiceEl.style.display = 'none';
         return;
     }
     el.style.display = 'block';
-    const line1 = [t('popup_plan_load', { planned: s.plannedLoad, done: s.doneLoad, capacity: s.capacity, problems: s.capacityProblems })];
-    if (s.deferredCount > 0 && !s.sprint) line1.push(t('popup_plan_deferred', { count: s.deferredCount }));
-    if (s.intensiveCount > 0) line1.push(t('popup_plan_intensive', { count: s.intensiveCount }));
-    if (s.queuedCount > 0) line1.push(t('popup_plan_queued', { count: s.queuedCount }));
-    if (s.mastered > 0) line1.push(t('popup_plan_mastered', { count: s.mastered }));
-    const lines = [line1.join(' · ')];
+    const lines = [];
     if (s.sprint) {
         const sprintLine = t('popup_sprint', { until: s.sprint.until.slice(5).replace('-', '/'), days: s.sprint.daysLeft, left: s.sprint.left });
-        // Warn when the sprint budget cannot get through everything before the date.
         const perDay = Math.ceil(s.sprint.left / Math.max(1, s.sprint.daysLeft));
-        lines.push(perDay > s.capacityProblems ? `${sprintLine} · ${t('popup_sprint_short', { need: perDay })}` : sprintLine);
+        lines.push(perDay > s.total ? `${sprintLine} · ${t('popup_sprint_short', { need: perDay })}` : sprintLine);
+        lines.push(t('popup_sprint_today', { done: s.reviewDone, quota: s.reviewQuota }));
     } else {
-        lines.push(s.advice.pause
-            ? t('popup_new_pause')
-            : t('popup_new_advice', { today: s.advice.today, week: s.advice.perWeek }));
+        lines.push(t('popup_mode_line', {
+            mode: t(s.mode === 'grind' ? 'popup_mode_grind' : 'popup_mode_learn'),
+            total: s.total,
+            newDone: s.newDone,
+            newQuota: s.newQuota,
+            reviewDone: s.reviewDone,
+            reviewQuota: s.reviewQuota
+        }));
     }
+    const extras = [];
+    if (s.intensiveCount > 0) extras.push(t('popup_plan_intensive', { count: s.intensiveCount }));
+    if (s.queuedCount > 0) extras.push(t('popup_plan_queued', { count: s.queuedCount }));
+    if (s.mastered > 0) extras.push(t('popup_plan_mastered', { count: s.mastered }));
+    if (extras.length) lines.push(extras.join(' · '));
     if (s.weakTopics.length) {
         const shown = s.weakTopics.slice(0, 3).map(w => `${translateTopicName(w.topic)} ${w.rate}%`).join(' · ');
         lines.push(t('popup_weak_topics', { topics: shown, overall: s.overallRate }));
     }
     el.innerText = lines.join('\n');
     el.title = t('popup_plan_help');
+    renderPlanChoice(choiceEl, s);
+}
+
+/** Over or under the review share today: let the user decide (once a day). */
+function renderPlanChoice(el, s) {
+    if (!el) return;
+    el.innerHTML = '';
+    let text = null;
+    let options = [];
+    if (s.overflow > 0) {
+        text = t('popup_overflow', { count: s.overflow });
+        options = [
+            [t('popup_overflow_include'), { overflow: 'include' }],
+            [t('popup_overflow_defer'), { overflow: 'defer' }]
+        ];
+    } else if (s.spareSlots > 0 && !s.sprint) {
+        text = t('popup_spare', { count: s.spareSlots });
+        options = s.soonCount > 0
+            ? [[t('popup_spare_pull'), { spare: 'pull' }], [t('popup_spare_new'), { spare: 'new' }]]
+            : [[t('popup_spare_new'), { spare: 'new' }]];
+    }
+    if (!text) {
+        el.style.display = 'none';
+        return;
+    }
+    el.style.display = 'flex';
+    const label = document.createElement('span');
+    label.className = 'leave-status';
+    label.textContent = text;
+    el.appendChild(label);
+    for (const [name, value] of options) {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'leave-btn';
+        b.textContent = name;
+        b.addEventListener('click', () => { void saveDayChoice(value); });
+        el.appendChild(b);
+    }
+}
+
+async function saveDayChoice(value) {
+    const LB = getLoadBalancer();
+    if (!LB) return;
+    const todayKey = LB.toKey(new Date());
+    const state = await chrome.storage.local.get({ reviewPlan: null });
+    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? { ...state.reviewPlan } : {};
+    const prev = plan.dayChoice && plan.dayChoice.date === todayKey ? plan.dayChoice : { date: todayKey };
+    plan.dayChoice = { ...prev, ...value, date: todayKey };
+    await chrome.storage.local.set({ reviewPlan: plan });
+    await updateDashboard();
 }
 
 function translateTopicName(topic) {

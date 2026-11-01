@@ -4,13 +4,20 @@
  * FSRS / reinforcement decide *when a problem becomes due*. This planner decides
  * *which day you actually do it*, within a daily budget:
  *
+ * - Two modes split the day's problems between new and review:
+ *   learning (学习模式) 70% new / 30% review, grinding (刷题模式) 50% / 50%.
+ *   The total follows the user's real pace (average problems a day over their
+ *   last 14 active days; 10 for new users) or a number they set. Reviews get
+ *   their share as the review budget; new problems are the user's own picks,
+ *   shown as a quota with progress.
+ * - When more reviews are due than the review share, the user chooses: add
+ *   them to today, or roll them on. When fewer are due, the user chooses: pull
+ *   in reviews due within a week, or give the room to new problems.
+ *
  * - Load is weighted by difficulty: Easy 1, Medium 2, Hard 3.
- * - Budget (capacity) follows the user's real pace: the average daily load of
- *   their last 14 active days (new problems included; multi-practice reviews,
- *   marked `extra`, and repeats of a problem on the same day are left out, so
- *   practice outside the budget does not inflate it). Fewer than 5 active
- *   days → the default of 3 problems a day. The user may fix it instead
- *   ("N problems a day"). Frozen once per day by the caller.
+ * - `capacity` passed to planReviews is the REVIEW budget in load units
+ *   (review quota × average weight); reviews already done today count
+ *   against it, new problems do not (they have their own quota).
  * - Simulating day by day, due problems wait in a queue ordered by how likely
  *   they are to be forgotten (FSRS retrievability, lowest first; relearn gets a
  *   small boost). Each day takes problems until the budget is used; the rest
@@ -46,14 +53,15 @@
         windowDays: 14,           // active days averaged for the budget
         lookbackDays: 60,         // how far back to look for those active days
         minActiveDays: 5,         // fewer → default budget
-        defaultDailyProblems: 3,  // new users
+        defaultDailyProblems: 10, // new users (no pace yet)
+        fillAheadDays: 7,         // "pull in" looks this far ahead
         minCapacity: 3,
         topicShare: 0.4,
         broadTagShare: 0.3,       // tags on more than 30% of problems are too broad to be a topic
         admitBudgetShare: 0.8,    // queued problems may fill the projected load up to 80% of budget
         admitCostFactor: 0.4,     // average daily cost of a problem in relearn, × its weight
         admitMaxPerDay: 5,
-        newProblemCostFactor: 4,  // first solve + 3 consolidation reviews
+        admitMinPerDay: 1,        // the queue always moves, even when the review share is full
         pullForwardDays: 2,
         pullForwardMinInterval: 7,
         pullForwardRatio: 0.15,
@@ -159,6 +167,101 @@
         return Math.max(0, 1 - Math.max(0, overdue + 1) / (interval * 4));
     }
 
+    const MODES = {
+        learn: { newShare: 0.7 },
+        grind: { newShare: 0.5 }
+    };
+
+    function normalizeMode(mode) {
+        return mode === 'grind' ? 'grind' : 'learn';
+    }
+
+    /**
+     * Average number of problems a day over the last 14 active days before
+     * today (within 60 days). A problem counts once a day; multi-practice
+     * reviews (marked `extra`) are left out.
+     */
+    function paceProblems(problems, today, options = {}) {
+        const opt = { ...DEFAULTS, ...options };
+        const todayKey = toKey(today);
+        const earliest = startOfDay(today).getTime() - opt.lookbackDays * DAY_MS;
+        const perDay = new Map();
+        for (const p of Object.values(problems || {})) {
+            if (!p) continue;
+            const seen = new Set();
+            const budgeted = (Array.isArray(p.history) ? p.history : []).filter(h => h && !h.extra);
+            for (const d of sortedDates(budgeted)) {
+                if (d.getTime() < earliest) continue;
+                const key = toKey(d);
+                if (key >= todayKey || seen.has(key)) continue;
+                seen.add(key);
+                perDay.set(key, (perDay.get(key) || 0) + 1);
+            }
+        }
+        const recent = Array.from(perDay.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, opt.windowDays);
+        if (!recent.length) return { avg: null, activeDays: 0 };
+        return { avg: recent.reduce((sum, [, n]) => sum + n, 0) / recent.length, activeDays: recent.length };
+    }
+
+    /**
+     * Today's budget in problems, split by mode.
+     * `previousAuto` = yesterday's automatic total (the automatic total only goes up:
+     * following the plan must not shrink the plan; users lower it in Settings).
+     * @returns {{mode, total, newQuota, reviewQuota, reviewCapacity, avgWeight, source: 'fixed'|'auto'|'default'}}
+     */
+    function dailyBudget(problems, today, settings = {}, previousAuto = 0, options = {}) {
+        const opt = { ...DEFAULTS, ...options };
+        const mode = normalizeMode(settings && settings.mode);
+        const avgWeight = averageWeight(problems);
+        const fixed = Number(settings && settings.dailyProblems);
+        let total;
+        let source;
+        if (Number.isFinite(fixed) && fixed > 0) {
+            total = Math.round(fixed);
+            source = 'fixed';
+        } else {
+            const pace = paceProblems(problems, today, opt);
+            const floor = Number(previousAuto) || 0;
+            if (pace.activeDays < opt.minActiveDays) {
+                total = Math.max(floor, opt.defaultDailyProblems);
+                source = 'default';
+            } else {
+                total = Math.max(floor, Math.round(pace.avg));
+                source = 'auto';
+            }
+        }
+        total = Math.max(1, total);
+        const newQuota = Math.min(total - 1, Math.round(total * MODES[mode].newShare));
+        const reviewQuota = Math.max(1, total - Math.max(0, newQuota));
+        return {
+            mode,
+            total,
+            newQuota: Math.max(0, newQuota),
+            reviewQuota,
+            reviewCapacity: Math.max(1, Math.round(reviewQuota * avgWeight)),
+            avgWeight,
+            source
+        };
+    }
+
+    /** What was done today: new problems (first review today) and reviews (others), multi-practice left out. */
+    function doneToday(problems, today) {
+        const key = toKey(today);
+        let newCount = 0;
+        let reviewCount = 0;
+        let reviewLoad = 0;
+        for (const p of Object.values(problems || {})) {
+            const dates = p ? sortedDates((p.history || []).filter(h => h && !h.extra)) : [];
+            if (!dates.some(d => toKey(d) === key)) continue;
+            if (toKey(dates[0]) === key) newCount += 1;
+            else {
+                reviewCount += 1;
+                reviewLoad += weightOf(p);
+            }
+        }
+        return { newCount, reviewCount, reviewLoad };
+    }
+
     function doneLoadOn(problems, day) {
         const key = toKey(day);
         let load = 0;
@@ -169,46 +272,6 @@
             }
         }
         return load;
-    }
-
-    /**
-     * Daily budget from the user's real pace: average load of the last 14
-     * active days before today (within 60 days). Fewer than 5 active days →
-     * default 3 problems a day. Automatic budget only goes up (`previousAuto`
-     * is yesterday's). `settings.dailyProblems` overrides it.
-     */
-    function computeCapacity(problems, today, settings = {}, options = {}, previousAuto = 0) {
-        const opt = { ...DEFAULTS, ...options };
-        const avgW = averageWeight(problems);
-        const fixed = Number(settings && settings.dailyProblems);
-        if (Number.isFinite(fixed) && fixed > 0) {
-            return Math.max(opt.minCapacity, Math.round(fixed * avgW));
-        }
-        const todayKey = toKey(today);
-        const earliest = startOfDay(today).getTime() - opt.lookbackDays * DAY_MS;
-        const perDay = new Map();
-        for (const p of Object.values(problems || {})) {
-            if (!p) continue;
-            const w = weightOf(p);
-            const seen = new Set(); // a problem counts once a day: extra same-day practice is outside the budget
-            const budgeted = (Array.isArray(p.history) ? p.history : []).filter(h => h && !h.extra);
-            for (const d of sortedDates(budgeted)) {
-                if (d.getTime() < earliest) continue;
-                const key = toKey(d);
-                if (key >= todayKey || seen.has(key)) continue;
-                seen.add(key);
-                perDay.set(key, (perDay.get(key) || 0) + w);
-            }
-        }
-        const recent = Array.from(perDay.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, opt.windowDays);
-        const floor = Math.max(opt.minCapacity, Number(previousAuto) || 0);
-        if (recent.length < opt.minActiveDays) {
-            return Math.max(floor, Math.round(opt.defaultDailyProblems * avgW));
-        }
-        const avg = recent.reduce((sum, [, load]) => sum + load, 0) / recent.length;
-        // Upward only: following the plan must not shrink the plan (feedback loop);
-        // missed days are backlog, not less capacity. Users lower it in Settings.
-        return Math.max(floor, Math.round(avg));
     }
 
     /**
@@ -233,8 +296,10 @@
 
     /**
      * Which queued weak problems to take into relearn today: most stubborn
-     * (longest run of bad ratings) and most recently seen first, while the projected load stays within 80% of
-     * the budget, at most 5 a day.
+     * (longest run of bad ratings) and most recently seen first, while the
+     * projected load stays within 80% of the review budget, at most 5 a day —
+     * and always at least 1, so the queue keeps moving even when reviews fill
+     * the share (the popup then asks about the overflow).
      */
     function chooseAdmissions(problems, capacity, options = {}) {
         const opt = { ...DEFAULTS, ...options };
@@ -257,32 +322,11 @@
         for (const c of candidates) {
             if (admit.length >= opt.admitMaxPerDay) break;
             const cost = c.w * opt.admitCostFactor;
-            if (projected + cost > limit) break;
+            if (projected + cost > limit && admit.length >= opt.admitMinPerDay) break;
             admit.push(c.slug);
             projected += cost;
         }
         return { admit, projected, queued: candidates.length };
-    }
-
-    /**
-     * Advice on new problems (soft — the user picks them on LeetCode):
-     * how many fit today, how many a week the budget sustains, and whether the
-     * backlog says to pause.
-     */
-    function newProblemAdvice({ capacity, projected, doneLoad, plannedLoad, deferredLoad, avgWeight, queuedCount = 0 }, options = {}) {
-        const opt = { ...DEFAULTS, ...options };
-        const w = avgWeight > 0 ? avgWeight : 2;
-        const pause = deferredLoad > 2 * capacity;
-        // While weak problems wait in the queue, they get the budget first and
-        // new problems get only the share admissions leave free.
-        const sustainable = queuedCount > 0
-            ? Math.min(Math.max(0, capacity - projected), capacity * (1 - opt.admitBudgetShare))
-            : Math.max(0, capacity - projected);
-        const todayRoom = Math.max(0, capacity - doneLoad - plannedLoad);
-        const perWeek = Math.floor((7 * sustainable) / (opt.newProblemCostFactor * w));
-        // Today: what fits today, never more than a week's worth (a day's share while a queue waits).
-        const today = pause ? 0 : Math.min(Math.floor(todayRoom / w), queuedCount > 0 ? Math.ceil(perWeek / 7) : perWeek);
-        return { today, perWeek, pause };
     }
 
     /**
@@ -302,7 +346,7 @@
         const leave = new Set(ctx.leaveDays || []);
         const capacity = Number.isFinite(ctx.capacity) && ctx.capacity > 0
             ? ctx.capacity
-            : computeCapacity(problems, today, ctx.settings, opt);
+            : dailyBudget(problems, today, ctx.settings || {}, 0, opt).reviewCapacity;
         const broad = broadTags(problems, opt.broadTagShare);
         const weakTopics = new Set(Array.isArray(ctx.weakTopics) ? ctx.weakTopics : []);
         const inWeakTopic = (p) => Array.isArray(p.topics) && p.topics.some(t => weakTopics.has(t));
@@ -318,7 +362,9 @@
                 if (t) newTopicLoad.set(t, (newTopicLoad.get(t) || 0) + weightOf(p));
             }
         }
-        const doneLoad = doneLoadOn(problems, today);
+        const doneLoad = doneToday(problems, today).reviewLoad;
+        const includeAllDueToday = Boolean(ctx.includeAllDueToday);
+        const fillToday = Boolean(ctx.fillTodayFromSoon);
         const H = opt.horizonDays;
 
         const days = [];
@@ -374,7 +420,7 @@
             queue.sort((a, b) => score(a) - score(b) || b.w - a.w || (a.slug < b.slug ? -1 : 1));
 
             // Regular reviews share the capacity; pinned intensive load is extra.
-            const cap = capacity - (d === 0 ? doneLoad : 0);
+            const cap = d === 0 && includeAllDueToday ? Infinity : capacity - (d === 0 ? doneLoad : 0);
             const topicCap = Math.max(1, capacity * opt.topicShare);
             const topicLoad = d === 0 ? new Map(newTopicLoad) : new Map();
             let regular = 0;
@@ -402,8 +448,19 @@
             queue.length = 0;
             queue.push(...remainingQueue);
 
+            // The user chose to fill today's review room with problems due soon.
+            if (d === 0 && fillToday && regular < cap) {
+                const soon = pending
+                    .filter(it => !taken.has(it.slug) && it.dueIdx > 0 && it.dueIdx <= opt.fillAheadDays)
+                    .sort((a, b) => score(a) - score(b) || a.dueIdx - b.dueIdx);
+                for (const it of soon) {
+                    if (regular + it.w > cap) continue;
+                    take(it);
+                }
+            }
+
             // Smooth peaks: pull a few long-interval problems slightly early.
-            if (regular < cap) {
+            if (regular < cap && cap !== Infinity) {
                 for (let k = cursor; k < pending.length; k++) {
                     const it = pending[k];
                     const ahead = it.dueIdx - d;
@@ -441,6 +498,8 @@
             deferredCount,
             deferredLoad,
             plannedRegularLoad: days[0].regular,
+            spareLoad: includeAllDueToday ? 0 : Math.max(0, capacity - doneLoad - days[0].regular),
+            soonCount: pending.filter(it => it.dueIdx > 0 && it.dueIdx <= opt.fillAheadDays && assignment[it.slug] !== todayKey).length,
             sprintLeft: sprintStart === null ? 0 : Object.values(problems || {}).filter(p => p && !isRethink(p) && lastReviewTime(p) < sprintStart).length
         };
     }
@@ -453,13 +512,15 @@
         weightOf,
         retrievability,
         doneLoadOn,
+        doneToday,
+        paceProblems,
+        dailyBudget,
+        MODES,
         broadTags,
         mainTopic,
         averageWeight,
-        computeCapacity,
         projectedDailyLoad,
         chooseAdmissions,
-        newProblemAdvice,
         planReviews
     };
 }));

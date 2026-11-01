@@ -1361,3 +1361,16 @@ body.theme-brnd .notes-flashcard::before {
     border-color: var(--terminal) !important;
     color: var(--terminal) !important;
 }
+
+/* ---------- Over/under the review share: today's choice ---------- */
+.plan-choice {
+    flex-wrap: wrap;
+    border: 1px dashed var(--border-dim);
+    border-radius: var(--radius);
+    padding: 6px 8px;
+}
+
+.plan-choice .leave-status {
+    flex-basis: 100%;
+    margin-bottom: 4px;
+}

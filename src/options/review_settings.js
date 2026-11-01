@@ -8,6 +8,7 @@
  */
 import '../algorithms/reinforcement.js';
 import '../algorithms/topic_mastery.js';
+import '../algorithms/load_balancer.js';
 import '../shared/ui_i18n.js';
 import '../shared/history_import.js';
 
@@ -19,12 +20,17 @@ const STRINGS = {
             'New problem rated Good/Easy the first time: reviewed again after 3, 8 and 20 days, then the normal schedule.',
             'Hard or Again always triggers short-term review: after 1, 3 and 7 days, then the normal schedule. A bad rating during these steps goes back one step.',
             'A problem rated Hard/Again 3 times in a row is "stubborn": practised 2× a day (3× if it keeps failing), 4 hours apart, until rated Good/Easy twice in a row. You get a notification for each extra practice.',
-            'Daily budget follows your average over your last 14 active days (new problems included), or the number below. Weak problems from your history are queued and let in as the budget allows, most stubborn first.',
+            'Each day is split into new problems and reviews by mode. When more reviews are due than the review share, the popup asks whether to add them to today or roll them on; when fewer are due, whether to pull in reviews due soon or do more new problems. Weak problems from your history are queued and let in as the review share allows, most stubborn first.',
             'A multi-practice problem rated badly 6 times needs a different approach: it pauses, and the popup offers its solutions and easier problems of the same topic until you mark it understood.',
             'Mastered = reviewed Good/Easy twice in a row and next review 60+ days away.'
         ],
-        rv_budget_label: 'About how many problems a day (blank = automatic)',
-        rv_budget_hint: 'Includes new problems. With 3 a day, about 2–3 new problems a week fit; with 5 a day, about 3–4. Blank = follow your recent pace (it only goes up automatically; lower it here).',
+        rv_mode_label: 'Mode',
+        rv_mode_learn: 'Learning — 70% new problems, 30% review (getting started, working through a list)',
+        rv_mode_grind: 'Grinding — 50% new, 50% review (company list, interview prep)',
+        rv_budget_label: 'Problems a day, new + review (blank = automatic)',
+        rv_budget_hint: 'Blank = your average over the last 14 active days (10 until there is enough history; it only goes up automatically — lower it here). Multi-practice comes on top.',
+        rv_split: 'Today: {total} problems = {newQuota} new + {reviewQuota} review ({source})',
+        rv_source_fixed: 'your number', rv_source_auto: 'your recent pace', rv_source_default: 'default for new users',
         rv_budget_invalid: 'Enter a whole number from 1 to 50, or leave it blank.',
         rv_pool_label: 'Stubborn problems practised several times a day (at once)',
         rv_pool_hint: 'Others wait in short-interval review until a slot frees up. 0 turns multi-practice off.',
@@ -62,12 +68,17 @@ const STRINGS = {
             '新题第一次就评「正常/简单」：隔 3 天、8 天、20 天各复习一次，然后回到正常排期。',
             '评「困难」或「重来」，不管以前表现如何，都会进入短期加强：隔 1 天、3 天、7 天各复习一次；加强期间再评差，退回一步。',
             '连续 3 次评「困难/重来」的题算「顽固题」：一天练 2 次（一直失败则 3 次），间隔 4 小时，直到连续 2 次评「正常/简单」。每次加练都会弹系统通知。',
-            '每天的预算取你最近 14 个做题日的平均（含新题），也可以在下面填固定题数。历史里的薄弱题先排队，预算有余量时按最顽固的优先放进来。',
+            '每天的题量按模式拆成新题和复习。到期复习比复习名额多时，弹窗会问你加进今天还是顺延；少的时候，问你提前复习快到期的题还是多做新题。历史里的薄弱题先排队，复习名额有余量时按最顽固的优先放进来。',
             '一天多练里累计评差 6 次的题说明硬刷没用：它会暂停，弹窗里给出题解和同专题的简单题，等你点「我看懂了」再继续。',
             '已掌握 = 连续 2 次评「正常/简单」，且下次复习在 60 天以后。'
         ],
-        rv_budget_label: '每天大概做几题（留空 = 自动）',
-        rv_budget_hint: '包含新题。每天 3 题大约每周能学 2–3 道新题，每天 5 题大约 3–4 道。留空 = 跟随你最近的节奏（只会自动调高，想调低就在这里填）。',
+        rv_mode_label: '模式',
+        rv_mode_learn: '学习模式：70% 新题、30% 复习（入门、按题单学新知识）',
+        rv_mode_grind: '刷题模式：50% 新题、50% 复习（刷公司题单、准备面试）',
+        rv_budget_label: '每天总题量，新题 + 复习（留空 = 自动）',
+        rv_budget_hint: '留空 = 你最近 14 个做题日的平均（数据不够时按 10 题；自动值只升不降，想调低就在这里填）。一天多练另算。',
+        rv_split: '今天：{total} 题 = {newQuota} 道新题 + {reviewQuota} 道复习（{source}）',
+        rv_source_fixed: '你填的数字', rv_source_auto: '按最近节奏', rv_source_default: '新用户默认',
         rv_budget_invalid: '请输入 1 到 50 的整数，或者留空。',
         rv_pool_label: '同时一天多练的顽固题数量',
         rv_pool_hint: '其余顽固题先走短间隔加强，有空位时按最顽固的顺序补进来。填 0 关闭一天多练。',
@@ -128,6 +139,11 @@ function buildReviewCard() {
     card.innerHTML = `
         <h2 data-rv="rv_heading"></h2>
         <ul class="hint" id="rv-rules" style="margin: 6px 0 12px; padding-left: 18px;"></ul>
+        <div class="field" style="margin-bottom: 12px;">
+            <label data-rv="rv_mode_label"></label>
+            <label style="display:block; font-weight:normal; margin:4px 0;"><input type="radio" name="rv-mode" value="learn"> <span data-rv="rv_mode_learn"></span></label>
+            <label style="display:block; font-weight:normal; margin:4px 0;"><input type="radio" name="rv-mode" value="grind"> <span data-rv="rv_mode_grind"></span></label>
+        </div>
         <div class="grid" style="gap: 15px;">
             <div class="field">
                 <label for="rv-budget" data-rv="rv_budget_label"></label>
@@ -144,7 +160,8 @@ function buildReviewCard() {
             <button id="rv-save-btn" class="btn" data-rv="rv_save"></button>
             <span id="rv-save-status" class="status-text"></span>
         </div>
-        <p class="hint" id="rv-status" style="margin-top: 10px;"></p>
+        <p class="hint" id="rv-split" style="margin-top: 10px;"></p>
+        <p class="hint" id="rv-status" style="margin-top: 4px;"></p>
         <hr class="section-divider">
         <h3 style="margin: 12px 0 6px;" data-rv="tm_heading"></h3>
         <p class="hint" id="tm-hint"></p>
@@ -213,6 +230,15 @@ async function renderReview(card) {
     if (document.activeElement !== budget) {
         const n = Number(state.reviewSettings && state.reviewSettings.dailyProblems);
         budget.value = Number.isFinite(n) && n > 0 ? String(n) : '';
+    }
+    const modeValue = state.reviewSettings && state.reviewSettings.mode === 'grind' ? 'grind' : 'learn';
+    card.querySelectorAll('input[name="rv-mode"]').forEach(r => { r.checked = r.value === modeValue; });
+    const LBx = (typeof self !== 'undefined' ? self.LoadBalancer : window.LoadBalancer);
+    if (LBx) {
+        const planState = (await chrome.storage.local.get({ reviewPlan: null })).reviewPlan || {};
+        const fixed = Number(state.reviewSettings && state.reviewSettings.dailyProblems) > 0;
+        const b = LBx.dailyBudget(state.problems || {}, new Date(), state.reviewSettings || {}, fixed ? 0 : planState.autoTotal);
+        card.querySelector('#rv-split').textContent = t('rv_split', { total: b.total, newQuota: b.newQuota, reviewQuota: b.reviewQuota, source: t(`rv_source_${b.source}`) });
     }
     const all = Object.values(state.problems || {});
     const mode = (m) => all.filter(p => p && p.reinforce && p.reinforce.mode === m).length;
@@ -360,15 +386,29 @@ async function init() {
             return;
         }
         const cur = await chrome.storage.local.get({ reviewSettings: {}, reviewPlan: null });
-        const nextSettings = { ...(cur.reviewSettings || {}), intensivePoolSize: n };
+        const checkedMode = reviewCard.querySelector('input[name="rv-mode"]:checked');
+        const nextSettings = { ...(cur.reviewSettings || {}), intensivePoolSize: n, mode: checkedMode && checkedMode.value === 'grind' ? 'grind' : 'learn' };
         if (rawBudget === '') delete nextSettings.dailyProblems;
         else nextSettings.dailyProblems = budget;
         // Drop today's frozen budget so the change applies right away.
         const plan = cur.reviewPlan && typeof cur.reviewPlan === 'object' ? { ...cur.reviewPlan } : null;
-        if (plan) delete plan.capacityDate;
+        if (plan) { delete plan.capacityDate; delete plan.budgetDate; }
         await chrome.storage.local.set(plan ? { reviewSettings: nextSettings, reviewPlan: plan } : { reviewSettings: nextSettings });
         setStatus(statusEl, t('rv_saved'), 'ok');
         await renderReview(reviewCard);
+    });
+
+    reviewCard.querySelectorAll('input[name="rv-mode"]').forEach(radio => {
+        radio.addEventListener('change', async () => {
+            if (!radio.checked) return;
+            const cur = await chrome.storage.local.get({ reviewSettings: {}, reviewPlan: null });
+            const plan = cur.reviewPlan && typeof cur.reviewPlan === 'object' ? { ...cur.reviewPlan } : null;
+            if (plan) delete plan.budgetDate;
+            const next = { ...(cur.reviewSettings || {}), mode: radio.value === 'grind' ? 'grind' : 'learn' };
+            await chrome.storage.local.set(plan ? { reviewSettings: next, reviewPlan: plan } : { reviewSettings: next });
+            setStatus(reviewCard.querySelector('#rv-save-status'), t('rv_saved'), 'ok');
+            await renderReview(reviewCard);
+        });
     });
 
     reviewCard.querySelector('#sp-start-btn').addEventListener('click', async () => {

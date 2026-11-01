@@ -24,46 +24,83 @@ const mk = (difficulty, dueOffset, extra = {}) => {
 };
 const toMap = (list) => Object.fromEntries(list.map(p => [p.slug, p]));
 
-describe('capacity (budget from real pace)', () => {
+describe('daily budget: modes split new and review', () => {
     const solved = (offsets, difficulty = 'Medium', slug) => mk(difficulty, 30, { slug, history: offsets.map(o => ({ date: dayAt(o).toISOString(), rating: 3 })) });
-
-    test('new user (< 5 active days) gets the default of 3 problems a day', () => {
-        const problems = toMap([solved([-1, -2], 'Medium', 'a'), solved([-3], 'Medium', 'b')]);
-        expect(LB.computeCapacity(problems, today, {})).toBe(6); // 3 × average weight 2
-    });
-
-    test('average load of the last 14 active days, today excluded', () => {
+    const paceOf = (perDay, days = 20) => {
         const list = [];
-        for (let i = 1; i <= 20; i++) list.push(solved([-i], 'Medium', `m${i}`), solved([-i], 'Hard', `h${i}`)); // 5 a day
-        list.push(solved([0, 0, 0], 'Hard', 'today')); // today does not count
-        expect(LB.computeCapacity(toMap(list), today, {})).toBe(5);
+        for (let i = 1; i <= days; i++) for (let k = 0; k < perDay; k++) list.push(solved([-i], 'Medium', `p${i}-${k}`));
+        return toMap(list);
+    };
+
+    test('new user (< 5 active days): 10 a day; learning 7 new + 3 review', () => {
+        const b = LB.dailyBudget(toMap([solved([-1], 'Medium', 'a')]), today, {});
+        expect(b).toMatchObject({ mode: 'learn', total: 10, newQuota: 7, reviewQuota: 3, source: 'default' });
+        expect(b.reviewCapacity).toBe(6); // 3 reviews × average weight 2
     });
 
-    test('rest days do not lower the budget', () => {
-        const list = [];
-        for (let i = 1; i <= 10; i++) list.push(solved([-3 * i], 'Medium', `m${i}`), solved([-3 * i], 'Medium', `n${i}`)); // 4 on every 3rd day
-        expect(LB.computeCapacity(toMap(list), today, {})).toBe(4);
+    test('grinding mode splits 50/50', () => {
+        expect(LB.dailyBudget(paceOf(12), today, { mode: 'grind' })).toMatchObject({ total: 12, newQuota: 6, reviewQuota: 6, source: 'auto' });
     });
 
-    test('automatic budget only goes up; multi-practice and same-day repeats do not count', () => {
-        const list = [];
-        for (let i = 1; i <= 14; i++) list.push(solved([-i], 'Medium', `m${i}`)); // 2 a day
-        list.push(mk('Hard', 3, { slug: 'x', history: [-1, -2, -3].map(o => ({ date: dayAt(o, 9).toISOString(), rating: 1, extra: true })) }));
-        list.push(mk('Hard', 3, { slug: 'rep', history: [{ date: dayAt(-1, 9).toISOString(), rating: 1 }, { date: dayAt(-1, 15).toISOString(), rating: 3 }] }));
-        const problems = toMap(list);
-        // day -1: 2 + 3 (rep once) = 5, others 2 → (5 + 13×2) / 14 = 2.2 → 3 (minimum)
-        expect(LB.computeCapacity(problems, today, {})).toBe(3);
-        expect(LB.computeCapacity(problems, today, {}, {}, 8)).toBe(8); // never below yesterday's automatic budget
-        expect(LB.computeCapacity(problems, today, { dailyProblems: 2 }, {}, 8)).toBe(Math.round(2 * LB.averageWeight(problems))); // a fixed setting can lower it
+    test('total follows the average problems a day over the last 14 active days', () => {
+        expect(LB.paceProblems(paceOf(5), today)).toMatchObject({ avg: 5, activeDays: 14 });
+        expect(LB.dailyBudget(paceOf(5), today, {})).toMatchObject({ total: 5, newQuota: 4, reviewQuota: 1 });
     });
 
-    test('a fixed "problems a day" setting wins', () => {
-        const problems = toMap([solved([-1], 'Easy', 'e'), solved([-1], 'Hard', 'h')]); // average weight 2
-        expect(LB.computeCapacity(problems, today, { dailyProblems: 5 })).toBe(10);
+    test('multi-practice and same-day repeats do not count towards the pace', () => {
+        const problems = paceOf(4);
+        problems.x = mk('Hard', 3, { slug: 'x', history: [-1, -2, -3].map(o => ({ date: dayAt(o, 9).toISOString(), rating: 1, extra: true })) });
+        problems.rep = mk('Hard', 3, { slug: 'rep', history: [{ date: dayAt(-1, 9).toISOString(), rating: 1 }, { date: dayAt(-1, 15).toISOString(), rating: 3 }] });
+        expect(LB.paceProblems(problems, today).avg).toBeCloseTo((5 + 13 * 4) / 14, 5);
+    });
+
+    test('automatic total only goes up; a fixed number wins', () => {
+        expect(LB.dailyBudget(paceOf(5), today, {}, 9).total).toBe(9);
+        expect(LB.dailyBudget(paceOf(5), today, { dailyProblems: 4 }, 9)).toMatchObject({ total: 4, source: 'fixed', newQuota: 3, reviewQuota: 1 });
+    });
+
+    test('always at least one review slot', () => {
+        expect(LB.dailyBudget(paceOf(1), today, { dailyProblems: 1 })).toMatchObject({ total: 1, newQuota: 0, reviewQuota: 1 });
     });
 });
 
-describe('queue admission and new-problem advice', () => {
+describe('today\'s choices: over or under the review share', () => {
+    const due = (slug, offset, s = 5) => mk('Medium', offset, { slug, fsrs_stability: s, history: [{ date: dayAt(offset - 10).toISOString(), rating: 3 }] });
+
+    test('done today: first review today = new, others = review', () => {
+        const fresh = mk('Medium', 3, { slug: 'n', history: [{ date: dayAt(0, 8).toISOString(), rating: 3 }] });
+        const old = mk('Hard', 3, { slug: 'o', history: [{ date: dayAt(-5).toISOString(), rating: 3 }, { date: dayAt(0, 9).toISOString(), rating: 3 }] });
+        expect(LB.doneToday(toMap([fresh, old]), today)).toEqual({ newCount: 1, reviewCount: 1, reviewLoad: 3 });
+    });
+
+    test('overflow: rolled on by default, all of it today when the user adds it', () => {
+        const problems = toMap([due('a', -1, 1), due('b', 0, 2), due('c', 0, 3)]);
+        const plan = LB.planReviews(problems, { today, capacity: 2 });
+        expect(plan.today).toEqual(['a']);
+        expect(plan.deferredCount).toBe(2);
+        const all = LB.planReviews(problems, { today, capacity: 2, includeAllDueToday: true });
+        expect(all.today.sort()).toEqual(['a', 'b', 'c']);
+        expect(all.spareLoad).toBe(0);
+    });
+
+    test('spare room: reviews due within a week are pulled in only when the user asks', () => {
+        const problems = toMap([due('now', 0), due('soon', 3), due('later', 12)]);
+        const plain = LB.planReviews(problems, { today, capacity: 6 });
+        expect(plain.today).toEqual(['now']);
+        expect(plain.spareLoad).toBe(4);
+        expect(plain.soonCount).toBe(1);
+        const filled = LB.planReviews(problems, { today, capacity: 6, fillTodayFromSoon: true });
+        expect(filled.today.sort()).toEqual(['now', 'soon']);
+    });
+
+    test('new problems done today do not use the review share', () => {
+        const fresh = mk('Hard', 3, { slug: 'new', history: [{ date: dayAt(0, 8).toISOString(), rating: 3 }] });
+        const plan = LB.planReviews(toMap([fresh, due('r', 0)]), { today, capacity: 2 });
+        expect(plan.today).toEqual(['r']);
+    });
+});
+
+describe('queue admission', () => {
     const inRotation = (slug, gapDays, difficulty = 'Medium') => mk(difficulty, gapDays, { slug, history: [{ date: dayAt(0).toISOString(), rating: 3 }] });
     const queued = (slug, ratings, lastOffset) => mk('Medium', 40, {
         slug, reinforce: { mode: 'queued' },
@@ -86,17 +123,10 @@ describe('queue admission and new-problem advice', () => {
         expect(r.admit).toEqual(['stubborn']);
         const roomy = LB.chooseAdmissions(problems, 20);
         expect(roomy.admit).toEqual(['stubborn', 'twice', 'once']);
+        const full = LB.chooseAdmissions(problems, 1); // projected already above the limit
+        expect(full.admit).toEqual(['stubborn']);       // the queue still moves by one
     });
 
-    test('new-problem advice', () => {
-        expect(LB.newProblemAdvice({ capacity: 6, projected: 2, doneLoad: 0, plannedLoad: 2, deferredLoad: 0, avgWeight: 2 }))
-            .toEqual({ today: 2, perWeek: 3, pause: false });
-        expect(LB.newProblemAdvice({ capacity: 6, projected: 6, doneLoad: 0, plannedLoad: 6, deferredLoad: 14, avgWeight: 2 }))
-            .toEqual({ today: 0, perWeek: 0, pause: true });
-        // with a queue, new problems get only the 20% that admissions leave free
-        expect(LB.newProblemAdvice({ capacity: 24, projected: 12, doneLoad: 0, plannedLoad: 10, deferredLoad: 0, avgWeight: 2, queuedCount: 90 }))
-            .toEqual({ today: 1, perWeek: 4, pause: false });
-    });
 });
 
 describe('planReviews', () => {
@@ -122,8 +152,8 @@ describe('planReviews', () => {
         expect(plan.today.sort()).toEqual(['e1', 'h1']);
     });
 
-    test('work already done today counts against today', () => {
-        const done = mk('Hard', 5, { slug: 'done', history: [{ date: dayAt(0, 8).toISOString(), rating: 3 }] });
+    test('reviews already done today count against today', () => {
+        const done = mk('Hard', 5, { slug: 'done', history: [{ date: dayAt(-6).toISOString(), rating: 3 }, { date: dayAt(0, 8).toISOString(), rating: 3 }] });
         const plan = LB.planReviews(toMap([done, mk('Medium', 0, { slug: 'due' })]), { today, capacity: 4 });
         expect(plan.doneLoad).toBe(3);
         expect(plan.today).toEqual([]); // 3 done + 2 would exceed 4

@@ -16,7 +16,7 @@ It automatically tracks your submissions (both Accepted and Wrong Answer), sched
 
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-green?logo=google-chrome)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
-![Version](https://img.shields.io/badge/version-1.1.0-orange)
+![Version](https://img.shields.io/badge/version-1.2.0-orange)
 
 ## 🚀 Quick Setup
 
@@ -186,7 +186,9 @@ This fork turns the review queue into a daily plan you can keep up with. Details
 | Weak topic (15+ points below your own average) | Reviews come back about a third sooner and get priority |
 | Plain FSRS, next review 60+ days out, last two Good/Easy | Shown as mastered |
 
-**Daily plan.** Load is weighted Easy 1 / Medium 2 / Hard 3. The daily budget follows your average over your last 14 active days (new problems included; default 3 problems a day for new users) or a fixed number you set; it only goes up automatically. Due problems are taken by forgetting risk until the budget is used, one topic takes at most 40% of a day, and the rest rolls forward — so leave days and missed days are spread out instead of piling up. The popup tells you how many new problems fit today and per week.
+**Two modes.** *Learning* splits each day 70% new problems / 30% review (getting started, working through a list); *grinding* splits it 50% / 50% (a company list, interview prep). The day's total follows your average over the last 14 active days (10 for new users), or a number you set; it only goes up automatically. New problems are your own picks on LeetCode — the popup shows the quota and progress (e.g. new 2/7 · review 1/3).
+
+**Daily plan.** Reviews are taken by forgetting risk (load Easy 1 / Medium 2 / Hard 3) until the review share is used; one topic takes at most 40%. When more reviews are due than the share, the popup asks: add them to today, or roll them on. When fewer are due: pull in reviews due within a week, or do more new problems. Leave days and missed days are spread out instead of piling up. Multi-practice comes on top.
 
 **Also:** open the first N due problems at once with a fresh editor · leave days with weekly/monthly quota (changeable on the 1st) · merge-import history from a backup JSON · sprint mode before an interview · FSRS fix (an "Again" used to make the next interval longer).
 
@@ -722,7 +724,9 @@ npm run build
 | 弱专题（比自己的平均答好率低 15 个百分点以上） | 复习间隔缩短约三分之一，排题优先 |
 | 正常排期、下次复习在 60 天以后、最近 2 次答好 | 显示为已掌握 |
 
-**每日计划：** 负荷按 简单 1 / 中等 2 / 困难 3 计算。每天的预算取你最近 14 个做题日的平均（含新题，新用户默认每天 3 题），也可以填固定题数，自动预算只升不降。到期的题按遗忘风险排队装满预算，单个专题最多占当天 40%，其余顺延，所以请假和漏签不会堆在一天。弹窗会告诉你今天和每周还能开几道新题。
+**两种模式：** 学习模式按 70% 新题 / 30% 复习拆分每天的题量（入门、按题单学新知识）；刷题模式按 50% / 50%（刷公司题单、准备面试）。每天的总题量取你最近 14 个做题日的平均（新用户 10 题），也可以填固定数字，自动值只升不降。新题由你自己在 LeetCode 上挑，弹窗显示配额和进度（如「新题 2/7 · 复习 1/3」）。
+
+**每日计划：** 复习题按遗忘风险挑选（负荷：简单 1 / 中等 2 / 困难 3），装满复习名额为止，单个专题最多占 40%。到期复习比名额多时，弹窗问你加进今天还是顺延；比名额少时，问你提前复习一周内到期的题还是多做新题。请假和漏签的积压会被摊开，一天多练另算。
 
 **其他：** 一次打开前 N 道到期题并自动重置代码 · 请假（每周/每月额度，每月 1 号可改） · 从备份 JSON 合并导入历史 · 面试前的冲刺模式 · FSRS 修复（原来评「重来」反而会让间隔变长）。
 

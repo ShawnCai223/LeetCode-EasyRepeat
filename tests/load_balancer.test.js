@@ -75,7 +75,7 @@ describe('queue admission and new-problem advice', () => {
         expect(LB.projectedDailyLoad(problems)).toBeCloseTo(2 / 2 + 3 / 4, 1);
     });
 
-    test('admits least stubborn first, within 80% of budget, at most 5 a day', () => {
+    test('admits most stubborn first, within 80% of budget, at most 5 a day', () => {
         const problems = toMap([
             inRotation('busy', 1),                // projected 2
             queued('stubborn', [1, 1, 1, 1], -1),
@@ -83,9 +83,9 @@ describe('queue admission and new-problem advice', () => {
             queued('twice', [2, 2], -3)
         ]);
         const r = LB.chooseAdmissions(problems, 4); // limit 3.2, each costs 0.8
-        expect(r.admit).toEqual(['once']);
+        expect(r.admit).toEqual(['stubborn']);
         const roomy = LB.chooseAdmissions(problems, 20);
-        expect(roomy.admit).toEqual(['once', 'twice', 'stubborn']);
+        expect(roomy.admit).toEqual(['stubborn', 'twice', 'once']);
     });
 
     test('new-problem advice', () => {
@@ -155,9 +155,27 @@ describe('planReviews', () => {
         expect(count).toBe(1);
     });
 
-    test('queued problems are not planned', () => {
-        const plan = LB.planReviews(toMap([mk('Easy', 0, { slug: 'q', reinforce: { mode: 'queued' } }), mk('Easy', 0, { slug: 'e' })]), { today, capacity: 5 });
+    test('queued and rethink problems are not planned', () => {
+        const plan = LB.planReviews(toMap([mk('Easy', 0, { slug: 'q', reinforce: { mode: 'queued' } }), mk('Easy', 0, { slug: 'r', reinforce: { mode: 'rethink' } }), mk('Easy', 0, { slug: 'e' })]), { today, capacity: 5 });
         expect(plan.today).toEqual(['e']);
+    });
+
+    test('weak-topic problems get priority', () => {
+        const a = mk('Medium', 0, { slug: 'normal', topics: ['Tree'], fsrs_stability: 10 });
+        const b = mk('Medium', 0, { slug: 'weak', topics: ['Dynamic Programming'], fsrs_stability: 10 });
+        expect(LB.planReviews(toMap([a, b]), { today, capacity: 2 }).today).toEqual(['normal']);
+        expect(LB.planReviews(toMap([a, b]), { today, capacity: 2, weakTopics: ['Dynamic Programming'] }).today).toEqual(['weak']);
+    });
+
+    test('sprint: everything not reviewed since the start is due, queued included', () => {
+        const old = (slug, extra = {}) => mk('Easy', 30, { slug, history: [{ date: dayAt(-20).toISOString(), rating: 3 }], ...extra });
+        const fresh = mk('Easy', 30, { slug: 'fresh', history: [{ date: dayAt(-1).toISOString(), rating: 3 }] });
+        const problems = toMap([old('a'), old('b'), old('q', { reinforce: { mode: 'queued' } }), old('r', { reinforce: { mode: 'rethink' } }), fresh]);
+        const sprint = { start: LB.toKey(dayAt(-2)), end: LB.toKey(dayAt(10)) };
+        const plan = LB.planReviews(problems, { today, capacity: 10, sprint });
+        expect(plan.today.sort()).toEqual(['a', 'b', 'q']);
+        expect(plan.sprintLeft).toBe(3);
+        expect(LB.planReviews(problems, { today, capacity: 10 }).today).toEqual([]);
     });
 
     test('one topic takes at most 40% of the budget while others wait', () => {

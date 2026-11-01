@@ -22,7 +22,12 @@
  * - A day with spare room may pull in a long-interval problem due within the
  *   next 2 days (at most ~15% of its interval early).
  * - Intensive (一天多练) problems are pinned, count double, and come on top of
- *   the budget. Queued weak problems are not planned until admitted.
+ *   the budget. Queued weak problems are not planned until admitted;
+ *   "rethink" problems are paused until the user marks them understood.
+ * - Weak-topic problems get a small priority boost.
+ * - Sprint mode (冲刺, before an interview): every problem not reviewed since
+ *   the sprint started is due now, queued ones included, so the (larger)
+ *   budget walks through all of them by forgetting risk and topic mix.
  * - Leave days have zero budget. Work already done today counts.
  */
 (function (root, factory) {
@@ -53,6 +58,7 @@
         pullForwardMinInterval: 7,
         pullForwardRatio: 0.15,
         relearnBoost: 0.1,
+        weakTopicBoost: 0.05,
         intensiveFactor: 2
     };
     const DECAY = -0.5;
@@ -101,6 +107,10 @@
 
     function isQueued(problem) {
         return Boolean(problem && problem.reinforce && problem.reinforce.mode === 'queued');
+    }
+
+    function isRethink(problem) {
+        return Boolean(problem && problem.reinforce && problem.reinforce.mode === 'rethink');
     }
 
     function sortedDates(history) {
@@ -209,7 +219,7 @@
     function projectedDailyLoad(problems) {
         let load = 0;
         for (const p of Object.values(problems || {})) {
-            if (!p || isQueued(p) || isIntensive(p) || !p.nextReviewDate) continue;
+            if (!p || isQueued(p) || isRethink(p) || isIntensive(p) || !p.nextReviewDate) continue;
             const dates = sortedDates(p.history);
             if (!dates.length) continue;
             const last = dates[dates.length - 1].getTime();
@@ -222,8 +232,8 @@
     }
 
     /**
-     * Which queued weak problems to take into relearn today: least stubborn and
-     * most recently seen first, while the projected load stays within 80% of
+     * Which queued weak problems to take into relearn today: most stubborn
+     * (longest run of bad ratings) and most recently seen first, while the projected load stays within 80% of
      * the budget, at most 5 a day.
      */
     function chooseAdmissions(problems, capacity, options = {}) {
@@ -242,7 +252,7 @@
         const candidates = Object.values(problems || {})
             .filter(isQueued)
             .map(p => ({ slug: p.slug, w: weightOf(p), tail: weakTail(p), seen: lastSeen(p) }))
-            .sort((a, b) => a.tail - b.tail || b.seen - a.seen || (a.slug < b.slug ? -1 : 1));
+            .sort((a, b) => b.tail - a.tail || b.seen - a.seen || (a.slug < b.slug ? -1 : 1));
         const admit = [];
         for (const c of candidates) {
             if (admit.length >= opt.admitMaxPerDay) break;
@@ -294,6 +304,10 @@
             ? ctx.capacity
             : computeCapacity(problems, today, ctx.settings, opt);
         const broad = broadTags(problems, opt.broadTagShare);
+        const weakTopics = new Set(Array.isArray(ctx.weakTopics) ? ctx.weakTopics : []);
+        const inWeakTopic = (p) => Array.isArray(p.topics) && p.topics.some(t => weakTopics.has(t));
+        const sprintStart = ctx.sprint && ctx.sprint.start ? startOfDay(new Date(`${ctx.sprint.start}T00:00:00`)).getTime() : null;
+        const lastReviewTime = (p) => { const d = sortedDates(p.history); return d.length ? d[d.length - 1].getTime() : -Infinity; };
         // Today's new problems (first review today) count towards their topic.
         const todayKey0 = toKey(today);
         const newTopicLoad = new Map();
@@ -321,10 +335,12 @@
         const assignment = {};
         const pending = [];
         for (const p of Object.values(problems || {})) {
-            if (!p || !p.slug || !p.nextReviewDate || isQueued(p)) continue;
+            if (!p || !p.slug || !p.nextReviewDate || isRethink(p)) continue;
+            const inSprint = sprintStart !== null && lastReviewTime(p) < sprintStart;
+            if (isQueued(p) && !inSprint) continue;
             const due = new Date(p.nextReviewDate);
             if (!Number.isFinite(due.getTime())) continue;
-            const idx = dayIndex(due, today);
+            const idx = inSprint ? Math.min(0, dayIndex(due, today)) : dayIndex(due, today);
             if (idx > H) continue;
             if (isIntensive(p)) {
                 const d = nextWorkDay(idx);
@@ -352,7 +368,9 @@
             if (day.leave) continue;
 
             const onDate = new Date(startOfDay(today).getTime() + d * DAY_MS + 12 * 60 * 60 * 1000);
-            const score = (it) => retrievability(it.p, onDate) - (isRelearn(it.p) ? opt.relearnBoost : 0);
+            const score = (it) => retrievability(it.p, onDate)
+                - (isRelearn(it.p) ? opt.relearnBoost : 0)
+                - (inWeakTopic(it.p) ? opt.weakTopicBoost : 0);
             queue.sort((a, b) => score(a) - score(b) || b.w - a.w || (a.slug < b.slug ? -1 : 1));
 
             // Regular reviews share the capacity; pinned intensive load is extra.
@@ -422,7 +440,8 @@
             dueCount: dueNowOrBefore,
             deferredCount,
             deferredLoad,
-            plannedRegularLoad: days[0].regular
+            plannedRegularLoad: days[0].regular,
+            sprintLeft: sprintStart === null ? 0 : Object.values(problems || {}).filter(p => p && !isRethink(p) && lastReviewTime(p) < sprintStart).length
         };
     }
 

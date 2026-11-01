@@ -4,6 +4,7 @@ const R = require('../src/algorithms/reinforcement.js');
 const at = (s) => new Date(s);
 const h = (date, rating) => ({ date: at(date).toISOString(), rating, status: 'Accepted' });
 const dayKey = (d) => R.toKey(new Date(d));
+const fsrsLateG = '2026-11-20T10:00:00.000Z';
 
 describe('streaks', () => {
     test('weak streak counts trailing ratings <= 2', () => {
@@ -190,6 +191,42 @@ describe('same-day review and setup helpers', () => {
         const a = R.admitQueued(b, now);
         expect(a.reinforce).toMatchObject({ mode: 'relearn', step: 0 });
         expect(a.nextReviewDate).toBe(now.toISOString());
+    });
+
+    test('6 bad ratings in multi-practice -> rethink (paused); solved later -> relearn; understood -> back', () => {
+        const base = { slug: 'x', history: [h('2026-10-10T10:00', 1), h('2026-10-11T10:00', 1), h('2026-10-12T10:00', 1)] };
+        const r5 = R.scheduleAfterReview({ problem: { ...base, reinforce: { mode: 'intensive', badCount: 4 } }, rating: 1, now: at('2026-10-13T10:00'), fsrsNextReviewDate: fsrsLateG, intensiveSlugs: ['x'] });
+        expect(r5.reinforce).toMatchObject({ mode: 'intensive', badCount: 5 });
+        const r6 = R.scheduleAfterReview({ problem: { ...base, reinforce: r5.reinforce }, rating: 2, now: at('2026-10-13T15:00'), fsrsNextReviewDate: fsrsLateG, intensiveSlugs: ['x'] });
+        expect(r6.reinforce).toMatchObject({ mode: 'rethink', badCount: 6 });
+        expect(r6.leftIntensive).toBe(true);
+        const paused = { ...base, reinforce: r6.reinforce };
+        expect(R.isPaused(paused)).toBe(true);
+        expect(R.needsRethink(paused)).toBe(true);
+        expect(R.scheduleAfterReview({ problem: paused, rating: 1, now: at('2026-10-14T10:00'), fsrsNextReviewDate: fsrsLateG }).reinforce).toMatchObject({ mode: 'rethink', badCount: 7 });
+        expect(R.scheduleAfterReview({ problem: paused, rating: 3, now: at('2026-10-14T10:00'), fsrsNextReviewDate: fsrsLateG }).reinforce).toMatchObject({ mode: 'relearn', step: 0 });
+        const now = at('2026-10-15T09:00');
+        expect(R.resumeFromRethink(paused, now, true).reinforce).toMatchObject({ mode: 'intensive', intraday: true, badCount: 0 });
+        expect(R.resumeFromRethink(paused, now, false)).toMatchObject({ nextReviewDate: now.toISOString(), reinforce: { mode: 'relearn' } });
+        expect(R.selectIntensivePool({ x: paused }, 3).pool).toEqual([]);
+    });
+
+    test('weak-topic problems get FSRS gaps shortened to 2/3', () => {
+        const problem = { slug: 'w', history: [h('2026-09-01T10:00', 3)] };
+        const now = at('2026-10-01T10:00');
+        const fsrs = at('2026-10-31T10:00').toISOString(); // 30 days
+        const plain = R.scheduleAfterReview({ problem, rating: 3, now, fsrsNextReviewDate: fsrs });
+        const weak = R.scheduleAfterReview({ problem, rating: 3, now, fsrsNextReviewDate: fsrs, weakTopic: true });
+        expect(dayKey(plain.nextReviewDate)).toBe('2026-10-31');
+        expect(dayKey(weak.nextReviewDate)).toBe('2026-10-21');
+    });
+
+    test('mastered = plain FSRS, gap >= 60 days, last two ratings good', () => {
+        const p = { slug: 'm', nextReviewDate: at('2026-12-15T10:00').toISOString(), history: [h('2026-09-01T10:00', 3), h('2026-10-10T10:00', 4)] };
+        expect(R.isMastered(p)).toBe(true);
+        expect(R.isMastered({ ...p, nextReviewDate: at('2026-11-20T10:00').toISOString() })).toBe(false);
+        expect(R.isMastered({ ...p, history: [h('2026-09-01T10:00', 2), h('2026-10-10T10:00', 4)] })).toBe(false);
+        expect(R.isMastered({ ...p, reinforce: { mode: 'relearn' } })).toBe(false);
     });
 
     test('queued problems are not promoted to multi-practice', () => {

@@ -208,7 +208,8 @@
                     now,
                     fsrsNextReviewDate: nextStep.nextReviewDate,
                     intensiveSlugs: pool,
-                    poolSize: ctx && ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined
+                    poolSize: ctx && ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined,
+                    weakTopic: Array.isArray(plan.weakTopics) && Array.isArray(currentProblem.topics) && currentProblem.topics.some(t => plan.weakTopics.includes(t))
                 });
                 problems[problemKey].nextReviewDate = decision.nextReviewDate;
                 problems[problemKey].reinforce = decision.reinforce;

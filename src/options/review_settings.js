@@ -7,6 +7,8 @@
  *   replacing settings (the existing "Restore" replaces everything).
  */
 import '../algorithms/reinforcement.js';
+import '../algorithms/topic_mastery.js';
+import '../shared/ui_i18n.js';
 import '../shared/history_import.js';
 
 const STRINGS = {
@@ -17,7 +19,9 @@ const STRINGS = {
             'New problem rated Good/Easy the first time: reviewed again after 3, 8 and 20 days, then the normal schedule.',
             'Hard or Again always triggers short-term review: after 1, 3 and 7 days, then the normal schedule. A bad rating during these steps goes back one step.',
             'A problem rated Hard/Again 3 times in a row is "stubborn": practised 2× a day (3× if it keeps failing), 4 hours apart, until rated Good/Easy twice in a row. You get a notification for each extra practice.',
-            'Daily budget follows your average over your last 14 active days (new problems included), or the number below. Weak problems from your history are queued and let in as the budget allows.'
+            'Daily budget follows your average over your last 14 active days (new problems included), or the number below. Weak problems from your history are queued and let in as the budget allows, most stubborn first.',
+            'A multi-practice problem rated badly 6 times needs a different approach: it pauses, and the popup offers its solutions and easier problems of the same topic until you mark it understood.',
+            'Mastered = reviewed Good/Easy twice in a row and next review 60+ days away.'
         ],
         rv_budget_label: 'About how many problems a day (blank = automatic)',
         rv_budget_hint: 'Includes new problems. With 3 a day, about 2–3 new problems a week fit; with 5 a day, about 3–4. Blank = follow your recent pace (it only goes up automatically; lower it here).',
@@ -27,7 +31,20 @@ const STRINGS = {
         rv_save: 'Save',
         rv_saved: '✅ Saved.',
         rv_invalid: 'Enter a whole number from 0 to {max}.',
-        rv_status: 'Now: {intensive} in multi-practice · {stubborn} stubborn · {relearn} in short-term review · {queued} queued',
+        rv_status: 'Now: {intensive} in multi-practice · {stubborn} stubborn · {relearn} in short-term review · {queued} queued · {rethink} need a new approach · {mastered} mastered',
+        tm_heading: 'Topic mastery (last 30 days)',
+        tm_hint: 'A topic is weak when its Good/Easy rate is 15+ points below your overall rate ({overall}%). Weak topics come back about a third sooner and get priority. Needs 5+ problems and 8+ ratings.',
+        tm_empty: 'Not enough reviews in the last 30 days yet.',
+        tm_col_topic: 'Topic', tm_col_problems: 'Problems', tm_col_ratings: 'Ratings', tm_col_rate: 'Good/Easy', tm_col_status: 'Status',
+        tm_weak: 'Weak', tm_normal: 'Normal', tm_strong: 'Strong',
+        sp_heading: 'Sprint mode (before an interview)',
+        sp_hint: 'Until the date, every problem you haven\'t reviewed since the sprint started comes up once (weak and queued ones too), ordered by forgetting risk and mixed across topics, with a bigger daily budget.',
+        sp_until: 'Interview date',
+        sp_daily: 'Problems a day during the sprint (blank = twice your usual)',
+        sp_start: 'Start Sprint',
+        sp_stop: 'End Sprint',
+        sp_active: 'Sprint active until {until}.',
+        sp_invalid: 'Pick a date after today.',
         im_heading: '📥 Merge-import review history',
         im_hint: 'Merge the review history from a backup JSON into your current data. Unlike "Restore", nothing is replaced: histories are combined, the most recent schedule wins, notes are kept, settings and keys are not touched.',
         im_button: 'Choose Backup JSON to Merge',
@@ -45,7 +62,9 @@ const STRINGS = {
             '新题第一次就评「正常/简单」：隔 3 天、8 天、20 天各复习一次，然后回到正常排期。',
             '评「困难」或「重来」，不管以前表现如何，都会进入短期加强：隔 1 天、3 天、7 天各复习一次；加强期间再评差，退回一步。',
             '连续 3 次评「困难/重来」的题算「顽固题」：一天练 2 次（一直失败则 3 次），间隔 4 小时，直到连续 2 次评「正常/简单」。每次加练都会弹系统通知。',
-            '每天的预算取你最近 14 个做题日的平均（含新题），也可以在下面填固定题数。历史里的薄弱题先排队，预算有余量时再逐步放进来。'
+            '每天的预算取你最近 14 个做题日的平均（含新题），也可以在下面填固定题数。历史里的薄弱题先排队，预算有余量时按最顽固的优先放进来。',
+            '一天多练里累计评差 6 次的题说明硬刷没用：它会暂停，弹窗里给出题解和同专题的简单题，等你点「我看懂了」再继续。',
+            '已掌握 = 连续 2 次评「正常/简单」，且下次复习在 60 天以后。'
         ],
         rv_budget_label: '每天大概做几题（留空 = 自动）',
         rv_budget_hint: '包含新题。每天 3 题大约每周能学 2–3 道新题，每天 5 题大约 3–4 道。留空 = 跟随你最近的节奏（只会自动调高，想调低就在这里填）。',
@@ -55,7 +74,20 @@ const STRINGS = {
         rv_save: '保存',
         rv_saved: '✅ 已保存。',
         rv_invalid: '请输入 0 到 {max} 的整数。',
-        rv_status: '当前：{intensive} 题一天多练 · {stubborn} 道顽固题 · {relearn} 题在短期加强 · {queued} 道排队中',
+        rv_status: '当前：{intensive} 题一天多练 · {stubborn} 道顽固题 · {relearn} 题在短期加强 · {queued} 道排队中 · {rethink} 道需要换方法 · 已掌握 {mastered} 道',
+        tm_heading: '专题掌握度（最近 30 天）',
+        tm_hint: '某专题的答好率比你的整体答好率（{overall}%）低 15 个百分点以上，就算弱专题：复习间隔缩短约三分之一，排题时优先。至少 5 道题、8 次评分才判定。',
+        tm_empty: '最近 30 天的复习还不够多，暂时无法判定。',
+        tm_col_topic: '专题', tm_col_problems: '题数', tm_col_ratings: '评分次数', tm_col_rate: '答好率', tm_col_status: '判定',
+        tm_weak: '弱', tm_normal: '正常', tm_strong: '强',
+        sp_heading: '冲刺模式（面试前）',
+        sp_hint: '到面试日期之前，冲刺开始后还没复习过的题（包括薄弱题和排队的题）都会各出现一次，按遗忘风险排序、专题交叉，每天的预算也会加大。',
+        sp_until: '面试日期',
+        sp_daily: '冲刺期间每天几题（留空 = 平时的两倍）',
+        sp_start: '开始冲刺',
+        sp_stop: '结束冲刺',
+        sp_active: '冲刺进行中，到 {until} 结束。',
+        sp_invalid: '请选择今天之后的日期。',
         im_heading: '📥 合并导入历史记录',
         im_hint: '把备份 JSON 里的做题历史合并进当前数据。和「从备份文件恢复」不同，这里不会覆盖任何东西：历史记录合并，排期以最近一次复习为准，笔记都保留，设置和密钥不动。',
         im_button: '选择要合并的备份 JSON',
@@ -113,8 +145,35 @@ function buildReviewCard() {
             <span id="rv-save-status" class="status-text"></span>
         </div>
         <p class="hint" id="rv-status" style="margin-top: 10px;"></p>
+        <hr class="section-divider">
+        <h3 style="margin: 12px 0 6px;" data-rv="tm_heading"></h3>
+        <p class="hint" id="tm-hint"></p>
+        <div id="tm-table"></div>
+        <hr class="section-divider">
+        <h3 style="margin: 12px 0 6px;" data-rv="sp_heading"></h3>
+        <p class="hint" data-rv="sp_hint"></p>
+        <div class="grid" style="gap: 15px;">
+            <div class="field">
+                <label for="sp-until" data-rv="sp_until"></label>
+                <input type="date" id="sp-until">
+            </div>
+            <div class="field">
+                <label for="sp-daily" data-rv="sp_daily"></label>
+                <input type="number" id="sp-daily" min="1" max="50" step="1">
+            </div>
+        </div>
+        <div class="actions">
+            <button id="sp-start-btn" class="btn" data-rv="sp_start"></button>
+            <button id="sp-stop-btn" class="btn secondary" data-rv="sp_stop"></button>
+            <span id="sp-status" class="status-text"></span>
+        </div>
     `;
     return card;
+}
+
+function localToday() {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
 function buildImportCard() {
@@ -156,12 +215,65 @@ async function renderReview(card) {
         budget.value = Number.isFinite(n) && n > 0 ? String(n) : '';
     }
     const all = Object.values(state.problems || {});
+    const mode = (m) => all.filter(p => p && p.reinforce && p.reinforce.mode === m).length;
     card.querySelector('#rv-status').textContent = t('rv_status', {
-        intensive: all.filter(p => p && p.reinforce && p.reinforce.mode === 'intensive').length,
+        intensive: mode('intensive'),
         stubborn: all.filter(p => p && Rx.isStubborn(p.history)).length,
-        relearn: all.filter(p => p && p.reinforce && p.reinforce.mode === 'relearn').length,
-        queued: all.filter(p => p && p.reinforce && p.reinforce.mode === 'queued').length
+        relearn: mode('relearn'),
+        queued: mode('queued'),
+        rethink: mode('rethink'),
+        mastered: all.filter(p => Rx.isMastered(p)).length
     });
+
+    // Topic mastery table
+    const TM = (typeof self !== 'undefined' ? self.TopicMastery : window.TopicMastery);
+    const mastery = TM ? TM.computeTopicMastery(state.problems || {}, new Date()) : null;
+    const hint = card.querySelector('#tm-hint');
+    const box = card.querySelector('#tm-table');
+    box.innerHTML = '';
+    if (!mastery || mastery.overall === null || !mastery.topics.length) {
+        hint.textContent = t('tm_empty');
+    } else {
+        hint.textContent = t('tm_hint', { overall: mastery.overall });
+        const table = document.createElement('table');
+        table.style.cssText = 'width:100%; border-collapse:collapse; font-size:0.85rem;';
+        const head = document.createElement('tr');
+        for (const k of ['tm_col_topic', 'tm_col_problems', 'tm_col_ratings', 'tm_col_rate', 'tm_col_status']) {
+            const th = document.createElement('th');
+            th.textContent = t(k);
+            th.style.cssText = 'text-align:left; padding:4px 6px; border-bottom:1px solid currentColor; opacity:0.8; white-space:nowrap;';
+            head.appendChild(th);
+        }
+        table.appendChild(head);
+        for (const row of mastery.topics) {
+            const tr = document.createElement('tr');
+            const i18n = (typeof self !== 'undefined' ? self.EasyRepeatI18n : window.EasyRepeatI18n);
+            const topicName = i18n && typeof i18n.translateTopic === 'function' ? i18n.translateTopic(row.topic, lang) : row.topic;
+            const cells = [topicName, row.problems, row.ratings, `${row.rate}%`, t(`tm_${row.status}`)];
+            cells.forEach((v, i) => {
+                const td = document.createElement('td');
+                td.textContent = String(v);
+                td.style.cssText = i === 0 ? 'padding:3px 6px;' : 'padding:3px 6px; white-space:nowrap;';
+                if (i === 4 && row.status === 'weak') td.style.fontWeight = '700';
+                if (row.status === 'weak') td.style.color = '#e5484d';
+                if (row.status === 'strong') td.style.color = '#30a46c';
+                tr.appendChild(td);
+            });
+            table.appendChild(tr);
+        }
+        box.appendChild(table);
+    }
+
+    // Sprint
+    const sp = state.reviewSettings && state.reviewSettings.sprint;
+    const until = card.querySelector('#sp-until');
+    const daily = card.querySelector('#sp-daily');
+    until.min = localToday();
+    if (document.activeElement !== until) until.value = sp && sp.until ? sp.until : '';
+    if (document.activeElement !== daily) daily.value = sp && Number(sp.dailyProblems) > 0 ? String(sp.dailyProblems) : '';
+    const active = sp && sp.until && sp.until >= localToday();
+    card.querySelector('#sp-stop-btn').disabled = !sp;
+    setStatus(card.querySelector('#sp-status'), active ? t('sp_active', { until: sp.until }) : '', active ? 'ok' : '');
 }
 
 function renderImport(card) {
@@ -256,6 +368,36 @@ async function init() {
         if (plan) delete plan.capacityDate;
         await chrome.storage.local.set(plan ? { reviewSettings: nextSettings, reviewPlan: plan } : { reviewSettings: nextSettings });
         setStatus(statusEl, t('rv_saved'), 'ok');
+        await renderReview(reviewCard);
+    });
+
+    reviewCard.querySelector('#sp-start-btn').addEventListener('click', async () => {
+        const statusEl = reviewCard.querySelector('#sp-status');
+        const until = reviewCard.querySelector('#sp-until').value;
+        const today = localToday();
+        if (!until || until <= today) {
+            setStatus(statusEl, t('sp_invalid'), 'error');
+            return;
+        }
+        const rawDaily = reviewCard.querySelector('#sp-daily').value.trim();
+        const daily = Number(rawDaily);
+        if (rawDaily !== '' && (!Number.isInteger(daily) || daily < 1 || daily > 50)) {
+            setStatus(statusEl, t('rv_budget_invalid'), 'error');
+            return;
+        }
+        const cur = await chrome.storage.local.get({ reviewSettings: {} });
+        const prev = cur.reviewSettings && cur.reviewSettings.sprint;
+        const sprint = { start: prev && prev.until >= today ? prev.start : today, until };
+        if (rawDaily !== '') sprint.dailyProblems = daily;
+        await chrome.storage.local.set({ reviewSettings: { ...(cur.reviewSettings || {}), sprint } });
+        await renderReview(reviewCard);
+    });
+
+    reviewCard.querySelector('#sp-stop-btn').addEventListener('click', async () => {
+        const cur = await chrome.storage.local.get({ reviewSettings: {} });
+        const next = { ...(cur.reviewSettings || {}) };
+        delete next.sprint;
+        await chrome.storage.local.set({ reviewSettings: next });
         await renderReview(reviewCard);
     });
 

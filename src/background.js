@@ -325,7 +325,8 @@ async function autoSaveSessionAsAgain(session) {
                 now,
                 fsrsNextReviewDate: nextReviewDate,
                 intensiveSlugs: pool,
-                poolSize: ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined
+                poolSize: ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined,
+                weakTopic: Array.isArray(plan.weakTopics) && Array.isArray(current.topics) && current.topics.some(t => plan.weakTopics.includes(t))
             });
             nextReviewDate = decision.nextReviewDate;
             reinforce = decision.reinforce;

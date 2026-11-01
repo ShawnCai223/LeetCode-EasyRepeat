@@ -26,6 +26,7 @@ let currentLeave = { leaveDays: [], settings: null, isLeaveToday: false };
 let currentBatchSize = 3;
 let currentVisibleProblems = [];
 let currentLaterProblems = [];
+let currentRethinkProblems = [];
 let currentPlanSummary = null;
 
 const LEETCODE_HOSTS = new Set(['leetcode.com', 'leetcode.cn']);
@@ -196,6 +197,18 @@ function getLoadBalancer() {
     return (typeof window !== 'undefined' && window.LoadBalancer) || null;
 }
 
+function getTopicMastery() {
+    return (typeof window !== 'undefined' && window.TopicMastery) || null;
+}
+
+/** Sprint (冲刺) settings → active window for today, or null. */
+function activeSprint(settings, todayKey) {
+    const sp = settings && settings.sprint;
+    if (!sp || !sp.until || !sp.start) return null;
+    if (todayKey < sp.start || todayKey > sp.until) return null;
+    return sp;
+}
+
 const REINFORCE_BOOTSTRAP_KEY = 'reinforcementBootstrappedV2';
 
 /**
@@ -248,6 +261,12 @@ async function runDailyMaintenance(problemMap, now) {
         plan.admittedDate = todayKey;
     }
 
+    const TM = getTopicMastery();
+    if (TM) {
+        const mastery = TM.computeTopicMastery(map, now);
+        plan.weakTopics = mastery.weak;
+    }
+
     const poolSize = R.normalizePoolSize(settings.intensivePoolSize);
     const { pool, promoted } = R.selectIntensivePool(map, poolSize);
     if (promoted.length) {
@@ -293,12 +312,25 @@ async function buildTodayQueues(problemMap, now) {
 
     const stored = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null, leaveDays: [] });
     const planState = stored.reviewPlan && typeof stored.reviewPlan === 'object' ? stored.reviewPlan : {};
+    const settings = stored.reviewSettings || {};
     let capacity = planState.capacityDate === LB.toKey(now) ? Number(planState.capacity) : NaN;
     if (!Number.isFinite(capacity) || capacity <= 0) {
-        capacity = LB.computeCapacity(problemMap, now, stored.reviewSettings || {});
+        capacity = LB.computeCapacity(problemMap, now, settings);
+    }
+    const sprint = activeSprint(settings, LB.toKey(now));
+    if (sprint) {
+        capacity = Number(sprint.dailyProblems) > 0
+            ? LB.computeCapacity(problemMap, now, { dailyProblems: Number(sprint.dailyProblems) })
+            : capacity * 2;
     }
 
-    const plan = LB.planReviews(problemMap, { today: now, leaveDays: stored.leaveDays, capacity });
+    const plan = LB.planReviews(problemMap, {
+        today: now,
+        leaveDays: stored.leaveDays,
+        capacity,
+        weakTopics: planState.weakTopics || [],
+        sprint: sprint ? { start: sprint.start, end: sprint.until } : null
+    });
     const isIntensive = (p) => p.reinforce && p.reinforce.mode === 'intensive';
     const nowList = [];
     const later = [];
@@ -323,10 +355,20 @@ async function buildTodayQueues(problemMap, now) {
         queuedCount: all.filter(p => p.reinforce && p.reinforce.mode === 'queued').length
     });
 
+    const R = getReinforcement();
+    const TM = getTopicMastery();
+    const mastery = TM ? TM.computeTopicMastery(problemMap, now) : null;
+    const rethink = all.filter(p => p.reinforce && p.reinforce.mode === 'rethink');
+    currentRethinkProblems = rethink;
+
     return {
         now: nowList,
         later,
         summary: {
+            mastered: R ? all.filter(p => R.isMastered(p)).length : 0,
+            weakTopics: mastery ? mastery.topics.filter(t => t.status === 'weak') : [],
+            overallRate: mastery ? mastery.overall : null,
+            sprint: sprint ? { until: sprint.until, daysLeft: Math.max(0, LB.dayIndex(new Date(`${sprint.until}T12:00:00`), now)), left: plan.sprintLeft } : null,
             capacity: plan.capacity,
             capacityProblems: Math.max(1, Math.round(plan.capacity / avgWeight)),
             doneLoad: plan.doneLoad,
@@ -351,14 +393,110 @@ function renderPlanStatus() {
     }
     el.style.display = 'block';
     const line1 = [t('popup_plan_load', { planned: s.plannedLoad, done: s.doneLoad, capacity: s.capacity, problems: s.capacityProblems })];
-    if (s.deferredCount > 0) line1.push(t('popup_plan_deferred', { count: s.deferredCount }));
+    if (s.deferredCount > 0 && !s.sprint) line1.push(t('popup_plan_deferred', { count: s.deferredCount }));
     if (s.intensiveCount > 0) line1.push(t('popup_plan_intensive', { count: s.intensiveCount }));
     if (s.queuedCount > 0) line1.push(t('popup_plan_queued', { count: s.queuedCount }));
-    const line2 = s.advice.pause
-        ? t('popup_new_pause')
-        : t('popup_new_advice', { today: s.advice.today, week: s.advice.perWeek });
-    el.innerText = `${line1.join(' · ')}\n${line2}`;
+    if (s.mastered > 0) line1.push(t('popup_plan_mastered', { count: s.mastered }));
+    const lines = [line1.join(' · ')];
+    if (s.sprint) {
+        const sprintLine = t('popup_sprint', { until: s.sprint.until.slice(5).replace('-', '/'), days: s.sprint.daysLeft, left: s.sprint.left });
+        // Warn when the sprint budget cannot get through everything before the date.
+        const perDay = Math.ceil(s.sprint.left / Math.max(1, s.sprint.daysLeft));
+        lines.push(perDay > s.capacityProblems ? `${sprintLine} · ${t('popup_sprint_short', { need: perDay })}` : sprintLine);
+    } else {
+        lines.push(s.advice.pause
+            ? t('popup_new_pause')
+            : t('popup_new_advice', { today: s.advice.today, week: s.advice.perWeek }));
+    }
+    if (s.weakTopics.length) {
+        const shown = s.weakTopics.slice(0, 3).map(w => `${translateTopicName(w.topic)} ${w.rate}%`).join(' · ');
+        lines.push(t('popup_weak_topics', { topics: shown, overall: s.overallRate }));
+    }
+    el.innerText = lines.join('\n');
     el.title = t('popup_plan_help');
+}
+
+function translateTopicName(topic) {
+    const i18n = getI18n();
+    return (i18n && typeof i18n.translateTopic === 'function') ? i18n.translateTopic(topic, currentLanguage) : topic;
+}
+
+/**
+ * Problems paused for "rethink" (换方法): read the solution, practise easier
+ * problems of the same topic, then mark as understood.
+ */
+function renderRethink(isDashboard) {
+    const section = document.getElementById('rethink-section');
+    const list = document.getElementById('rethink-list');
+    const title = document.getElementById('rethink-title');
+    if (!section || !list) return;
+    if (!isDashboard || !currentRethinkProblems.length) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = 'block';
+    if (title) title.innerText = t('popup_rethink_title', { count: currentRethinkProblems.length });
+    list.innerHTML = '';
+    const TM = getTopicMastery();
+    const R = getReinforcement();
+    const base = currentLeetCodeBase.replace(/\/$/, '');
+    const all = currentAllProblems;
+    for (const p of currentRethinkProblems) {
+        const row = document.createElement('div');
+        row.className = 'rethink-row';
+        const name = document.createElement('div');
+        name.className = 'rethink-name';
+        name.textContent = (currentTitleCache[p.slug] && currentLanguage === 'zh' && currentTitleCache[p.slug].zh) || p.title || p.slug;
+        const hint = document.createElement('div');
+        hint.className = 'rethink-hint';
+        hint.textContent = t('popup_rethink_hint', { count: (p.reinforce && p.reinforce.badCount) || 6 });
+        const actions = document.createElement('div');
+        actions.className = 'rethink-actions';
+        const button = (label, onClick) => {
+            const b = document.createElement('button');
+            b.className = 'batch-btn';
+            b.type = 'button';
+            b.textContent = label;
+            b.addEventListener('click', onClick);
+            actions.appendChild(b);
+        };
+        button(t('popup_rethink_solution'), () => chrome.tabs.create({ url: `${base}/problems/${p.slug}/solutions/` }));
+        const LB = getLoadBalancer();
+        const topic = LB ? LB.mainTopic(p, LB.broadTags(Object.fromEntries(all.map(q => [q.slug, q])))) : (p.topics || [])[0];
+        if (topic) {
+            // Easier problems of the same topic: ones you already know first, else LeetCode's list.
+            const order = { easy: 1, medium: 2, hard: 3 };
+            const mine = all.filter(q => q.slug !== p.slug && Array.isArray(q.topics) && q.topics.includes(topic)
+                && (order[String(q.difficulty).toLowerCase()] || 2) <= (order[String(p.difficulty).toLowerCase()] || 2)
+                && (!q.reinforce || q.reinforce.mode === 'consolidate') && R && R.lastRating(q.history) >= 3)
+                .slice(0, 2);
+            button(t('popup_rethink_similar', { topic: translateTopicName(topic) }), () => {
+                if (mine.length) void openReviewTabs(mine);
+                else chrome.tabs.create({ url: TM ? TM.topicUrl(base, topic) : `${base}/problemset/` });
+            });
+        }
+        button(t('popup_rethink_done'), () => { void resumeRethink(p.slug); });
+        row.appendChild(name);
+        row.appendChild(hint);
+        row.appendChild(actions);
+        list.appendChild(row);
+    }
+}
+
+async function resumeRethink(slug) {
+    const R = getReinforcement();
+    if (!R) return;
+    const state = await chrome.storage.local.get({ problems: {}, reviewPlan: null, reviewSettings: null });
+    const p = state.problems[slug];
+    if (!p || !R.needsRethink(p)) return;
+    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? { ...state.reviewPlan } : {};
+    const pool = Array.isArray(plan.intensive) ? plan.intensive.filter(s => s !== slug) : [];
+    const size = R.normalizePoolSize(state.reviewSettings && state.reviewSettings.intensivePoolSize);
+    const room = pool.length < size;
+    const next = R.resumeFromRethink(p, new Date(), room);
+    if (room) pool.push(slug);
+    plan.intensive = pool;
+    await chrome.storage.local.set({ problems: { ...state.problems, [slug]: next }, reviewPlan: plan });
 }
 
 function formatTime(iso) {
@@ -784,6 +922,7 @@ function rerenderCurrentView() {
     renderLeaveBar();
     renderPlanStatus();
     renderLaterToday(isDashboard);
+    renderRethink(isDashboard);
     syncSidebarState();
 }
 
@@ -1109,7 +1248,8 @@ async function updateProblemSRS(slug, ease) {
                 now: new Date(),
                 fsrsNextReviewDate: nextStep.nextReviewDate,
                 intensiveSlugs: (ctx.reviewPlan && ctx.reviewPlan.intensive) || [],
-                poolSize: ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined
+                poolSize: ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined,
+                weakTopic: Boolean(ctx.reviewPlan && Array.isArray(ctx.reviewPlan.weakTopics) && Array.isArray(problem.topics) && problem.topics.some(t => ctx.reviewPlan.weakTopics.includes(t)))
             });
         } catch (e) {
             console.warn('[Popup] Reinforcement scheduling skipped:', e);

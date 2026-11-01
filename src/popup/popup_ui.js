@@ -113,6 +113,9 @@ export function renderVectors(problemList, containerId, isInteractive, options =
                 <span class="stat-tag ${diffStyle}">${difficultyText}</span>
                 ${problem.reinforce && problem.reinforce.mode === 'intensive' ? `<span class="stat-tag reinforce-tag reinforce-intensive">${t('popup_tag_intensive', {}, language)}</span>` : ''}
                 ${problem.reinforce && problem.reinforce.mode === 'relearn' ? `<span class="stat-tag reinforce-tag">${t('popup_tag_relearn', {}, language)}</span>` : ''}
+                ${problem.reinforce && problem.reinforce.mode === 'queued' ? `<span class="stat-tag reinforce-tag">${t('popup_tag_queued', {}, language)}</span>` : ''}
+                ${problem.reinforce && problem.reinforce.mode === 'rethink' ? `<span class="stat-tag reinforce-tag reinforce-intensive">${t('popup_tag_rethink', {}, language)}</span>` : ''}
+                ${typeof window !== 'undefined' && window.Reinforcement && window.Reinforcement.isMastered(problem) ? `<span class="stat-tag mastered-tag">${t('popup_tag_mastered', {}, language)}</span>` : ''}
                 <span class="stat-tag">${t('popup_interval_days', { days: interval }, language)}</span>
                 <span class="stat-tag">${t('popup_due_date', { date: nextReview }, language)}</span>
                 <div class="${actionGroupClass}">

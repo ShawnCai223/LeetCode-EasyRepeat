@@ -19,7 +19,15 @@
  *   step it goes back to plain FSRS. A rating <= 2 during relearn steps back
  *   one step (not back to the start).
  * - Existing weak problems found at setup/import are "queued": not scheduled
- *   until the daily plan has room for them (see LoadBalancer.admitQueued).
+ *   until the daily plan has room for them (see LoadBalancer.chooseAdmissions).
+ * - A multi-practice problem that keeps failing (6 bad ratings since it
+ *   entered) needs a different approach, not more repetition: it moves to
+ *   "rethink" — paused, with prompts to read the solution and practise easier
+ *   problems of the same topic — until the user marks it understood.
+ * - Problems in a weak topic get FSRS gaps shortened to 2/3 (≈ aiming at 93%
+ *   retention instead of 90%).
+ * - Mastered (derived, no state): plain FSRS, gap of 60+ days, last two
+ *   ratings Good/Easy.
  * - "Stubborn" = the last 3 ratings in a row were <= 2. Stubborn problems go
  *   into "intensive" mode (练 2 次/天, or 3 次/天 when the last 3 were all
  *   rating 1 or the weak streak is >= 5), spaced 4 hours apart within the day.
@@ -30,7 +38,7 @@
  *   keeps it intensive and resets that count.
  *
  * Problem fields used/written:
- *   problem.reinforce = { mode: 'consolidate'|'relearn'|'intensive'|'queued', step, goodStreak, intraday, since }
+ *   problem.reinforce = { mode: 'consolidate'|'relearn'|'intensive'|'queued'|'rethink', step, goodStreak, badCount, intraday, since }
  */
 (function (root, factory) {
     const exports = factory();
@@ -50,6 +58,10 @@
     const LAST_INTRADAY_HOUR = 23; // no same-day practice scheduled after 23:00 local
     const EXIT_INTENSIVE_GOOD_STREAK = 2;
     const DEFAULT_POOL_SIZE = 3;
+    const RETHINK_AFTER_BAD = 6;
+    // FSRS interval ∝ R^(1/decay) − 1: (0.93^-2 − 1) / (0.9^-2 − 1) ≈ 0.666
+    const WEAK_TOPIC_GAP_FACTOR = 2 / 3;
+    const MASTERED_GAP_DAYS = 60;
     const MAX_POOL_SIZE = 10;
 
     const DAY_MS = 24 * 60 * 60 * 1000;
@@ -160,6 +172,34 @@
         return modeOf(problem) === 'queued';
     }
 
+    function needsRethink(problem) {
+        return modeOf(problem) === 'rethink';
+    }
+
+    /** Queued and rethink problems are not planned. */
+    function isPaused(problem) {
+        const m = modeOf(problem);
+        return m === 'queued' || m === 'rethink';
+    }
+
+    /** Shorten an FSRS gap for weak-topic problems (at least one day). */
+    function weakTopicDate(fsrsDate, now, weakTopic) {
+        if (!weakTopic || !fsrsDate) return fsrsDate;
+        const gap = fsrsDate.getTime() - now.getTime();
+        return new Date(now.getTime() + Math.max(DAY_MS, gap * WEAK_TOPIC_GAP_FACTOR));
+    }
+
+    /** Plain FSRS, a gap of 60+ days and the last two ratings Good/Easy. */
+    function isMastered(problem) {
+        if (!problem || problem.reinforce || !problem.nextReviewDate) return false;
+        const rated = ratedHistory(problem.history);
+        if (rated.length < 2) return false;
+        if (rated.slice(-2).some(h => Number(h.rating) < 3)) return false;
+        const last = new Date(rated[rated.length - 1].date).getTime();
+        const next = new Date(problem.nextReviewDate).getTime();
+        return Number.isFinite(next) && (next - last) / DAY_MS >= MASTERED_GAP_DAYS;
+    }
+
     /**
      * Decide schedule overrides after a review.
      *
@@ -172,11 +212,11 @@
      * @param {number} [args.poolSize]
      * @returns {{nextReviewDate: string, reinforce: Object|null, joinedIntensive: boolean, leftIntensive: boolean}}
      */
-    function scheduleAfterReview({ problem, rating, now, fsrsNextReviewDate, intensiveSlugs = [], poolSize = DEFAULT_POOL_SIZE }) {
+    function scheduleAfterReview({ problem, rating, now, fsrsNextReviewDate, intensiveSlugs = [], poolSize = DEFAULT_POOL_SIZE, weakTopic = false }) {
         const r = Number(rating);
         const nowDate = now instanceof Date ? now : new Date(now);
         const nowISO = nowDate.toISOString();
-        const fsrsDate = fsrsNextReviewDate ? new Date(fsrsNextReviewDate) : null;
+        const fsrsDate = weakTopicDate(fsrsNextReviewDate ? new Date(fsrsNextReviewDate) : null, nowDate, weakTopic);
         const prev = problem && problem.reinforce ? problem.reinforce : null;
         const slug = problem && problem.slug;
         const history = [...((problem && problem.history) || []), { date: nowISO, rating: r }];
@@ -190,11 +230,40 @@
 
         const wasIntensive = Boolean(prev && prev.mode === 'intensive');
 
+        // Practised while paused for "rethink": still failing → stay paused;
+        // solved → back into relearn (understood, now make it stick).
+        if (prev && prev.mode === 'rethink') {
+            if (r <= 2) {
+                return {
+                    nextReviewDate: nowISO,
+                    reinforce: { ...prev, badCount: (Number(prev.badCount) || 0) + 1 },
+                    joinedIntensive: false,
+                    leftIntensive: false
+                };
+            }
+            return {
+                nextReviewDate: relearnDue(0, nowDate, fsrsDate).toISOString(),
+                reinforce: { mode: 'relearn', step: 0, goodStreak: 0, intraday: false, since: nowISO },
+                joinedIntensive: false,
+                leftIntensive: false
+            };
+        }
+
         if (r <= 2) {
             const inPool = wasIntensive || pool.includes(slug);
             const hasRoom = pool.filter(s => s !== slug).length < size;
             // Stays intensive on any bad rating; enters it after 3 bad ratings in a row.
             if ((wasIntensive || weakStreak(history) >= STUBBORN_STREAK) && (inPool || hasRoom)) {
+                const badCount = wasIntensive ? (Number(prev.badCount) || 0) + 1 : 1;
+                if (badCount >= RETHINK_AFTER_BAD) {
+                    // Repetition is not working: pause and change approach.
+                    return {
+                        nextReviewDate: nowDate.toISOString(),
+                        reinforce: { mode: 'rethink', step: 0, goodStreak: 0, badCount, intraday: false, since: nowISO },
+                        joinedIntensive: false,
+                        leftIntensive: wasIntensive
+                    };
+                }
                 const due = nextIntensiveDue(history, nowDate);
                 return {
                     nextReviewDate: due.date.toISOString(),
@@ -202,6 +271,7 @@
                         mode: 'intensive',
                         step: 0,
                         goodStreak: 0,
+                        badCount,
                         intraday: due.intraday,
                         since: wasIntensive && prev.since ? prev.since : nowISO
                     },
@@ -304,6 +374,22 @@
         };
     }
 
+    /**
+     * The user marked a "rethink" problem as understood: back to multi-practice
+     * when the pool has room, else to relearn — due now either way.
+     */
+    function resumeFromRethink(problem, now, poolHasRoom) {
+        const nowDate = now instanceof Date ? now : new Date(now);
+        const iso = nowDate.toISOString();
+        return {
+            ...problem,
+            nextReviewDate: iso,
+            reinforce: poolHasRoom
+                ? { mode: 'intensive', step: 0, goodStreak: 0, badCount: 0, intraday: true, since: iso }
+                : { mode: 'relearn', step: 0, goodStreak: 0, intraday: false, since: iso }
+        };
+    }
+
     /** Take a queued problem into relearn, due now. */
     function admitQueued(problem, now) {
         const nowDate = now instanceof Date ? now : new Date(now);
@@ -328,7 +414,7 @@
         const promoted = [];
         if (pool.length < size) {
             const candidates = all
-                .filter(p => !pool.includes(p.slug) && !isQueued(p) && isStubborn(p.history))
+                .filter(p => !pool.includes(p.slug) && !isPaused(p) && isStubborn(p.history))
                 .map(p => ({ slug: p.slug, streak: weakStreak(p.history), w: weight[String(p.difficulty || 'medium').toLowerCase()] || 2 }))
                 .sort((a, b) => b.streak - a.streak || b.w - a.w || (a.slug < b.slug ? -1 : 1));
             for (const c of candidates) {
@@ -372,6 +458,13 @@
         bootstrapProblem,
         admitQueued,
         isQueued,
+        isPaused,
+        needsRethink,
+        resumeFromRethink,
+        isMastered,
+        weakTopicDate,
+        RETHINK_AFTER_BAD,
+        WEAK_TOPIC_GAP_FACTOR,
         selectIntensivePool,
         promoteToIntensive
     };

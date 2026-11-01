@@ -1320,3 +1320,44 @@ body.theme-brnd .notes-flashcard::before {
     background: var(--hover-bg);
     font-weight: bold;
 }
+
+/* ---------- Rethink (换方法) ---------- */
+.rethink-section {
+    opacity: 1;
+}
+
+.rethink-row {
+    border: 1px solid var(--border-dim);
+    border-radius: var(--radius);
+    padding: 8px 10px;
+    margin-bottom: 8px;
+    font-family: var(--font-data);
+}
+
+.rethink-name {
+    color: var(--terminal);
+    font-size: 0.7rem;
+    margin-bottom: 4px;
+}
+
+.rethink-hint {
+    color: var(--accent);
+    font-size: 0.55rem;
+    opacity: 0.85;
+    margin-bottom: 6px;
+}
+
+.rethink-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.rethink-actions .batch-btn {
+    margin-left: 0;
+}
+
+.mastered-tag {
+    border-color: var(--terminal) !important;
+    color: var(--terminal) !important;
+}

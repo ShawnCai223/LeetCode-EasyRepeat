@@ -28,4 +28,12 @@ import './local_client.js';
 import './llm_gateway.js';
 import './async_notifier.js';
 
+import '../algorithms/reinforcement.js';
+import '../shared/review_reset.js';
+import './practice_reminder.js';
+
 import '../background.js';
+
+if (typeof self !== 'undefined' && self.PracticeReminder) {
+    self.PracticeReminder.register();
+}

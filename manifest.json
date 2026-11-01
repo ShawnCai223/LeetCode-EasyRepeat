@@ -53,6 +53,7 @@
                 "src/shared/problem_titles.js",
                 "src/algorithms/fsrs_logic.js",
                 "src/content/content_ui.js",
+                "src/algorithms/reinforcement.js",
                 "src/shared/storage.js",
                 "src/content/leetcode_api.js",
                 "src/content/llm_sidecar.js",

@@ -1289,3 +1289,34 @@ body.theme-brnd .notes-flashcard::before {
     opacity: 0.4;
     cursor: not-allowed;
 }
+
+/* ---------- Daily plan status & later-today queue ---------- */
+.plan-status {
+    font-family: var(--font-data);
+    font-size: 0.55rem;
+    color: var(--accent);
+    opacity: 0.85;
+    margin-bottom: 8px;
+    letter-spacing: 0.3px;
+    cursor: help;
+}
+
+.later-section {
+    margin-top: 14px;
+    opacity: 0.75;
+}
+
+.later-title {
+    margin-bottom: 10px;
+    font-size: 0.6rem;
+}
+
+.reinforce-tag {
+    border-color: var(--electric) !important;
+    color: var(--electric) !important;
+}
+
+.reinforce-intensive {
+    background: var(--hover-bg);
+    font-weight: bold;
+}

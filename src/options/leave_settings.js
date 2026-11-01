@@ -205,7 +205,7 @@ async function render(card) {
                 const status = card.querySelector('#leave-request-status');
                 if (!res.ok) return setStatus(status, t(`err_${res.reason}`), 'error');
                 await chrome.storage.local.set({ leaveDays: res.leaveDays });
-                setStatus(status, t('cancelled', { date: day }), 'success');
+                setStatus(status, t('cancelled', { date: day }), 'ok');
                 await render(card);
             });
             li.appendChild(btn);
@@ -248,7 +248,7 @@ async function init() {
             return;
         }
         await chrome.storage.local.set({ leaveSettings: res.settings });
-        setStatus(status, t('saved'), 'success');
+        setStatus(status, t('saved'), 'ok');
         await render(card);
     });
 
@@ -265,7 +265,7 @@ async function init() {
         if (dateKey <= LeaveLogic.toKey(now) && !confirm(t('confirm_today'))) return;
         // Today's / back-dated leave is applied (schedule shift) the next time the popup opens.
         await chrome.storage.local.set({ leaveDays: res.leaveDays });
-        setStatus(status, t('requested', { date: dateKey }), 'success');
+        setStatus(status, t('requested', { date: dateKey }), 'ok');
         await render(card);
     });
 

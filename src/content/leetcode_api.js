@@ -567,7 +567,11 @@
                 now.getMonth() === lastSolved.getMonth() &&
                 now.getDate() === lastSolved.getDate();
 
-            return sameDay && problem.difficulty === difficulty;
+            if (!(sameDay && problem.difficulty === difficulty)) return false;
+            // Intensive problems (一天多练) can be reviewed again once their next practice is due.
+            const R = (typeof self !== 'undefined' && self.Reinforcement) || (typeof window !== 'undefined' && window.Reinforcement) || null;
+            if (R && R.allowsSameDayReview(problem, now)) return false;
+            return true;
         } catch (e) {
             return false;
         }

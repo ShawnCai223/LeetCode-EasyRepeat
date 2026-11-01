@@ -6,6 +6,8 @@ import '../shared/leave_logic.js';
 import '../shared/review_reset.js';
 console.log('[Popup Entry] Config loaded, window.THEMES:', typeof window !== 'undefined' ? window.THEMES : 'N/A');
 import '../algorithms/fsrs_logic.js';
+import '../algorithms/reinforcement.js';
+import '../algorithms/load_balancer.js';
 import '../shared/storage.js';
 import '../algorithms/vector_db.js';
 import '../content/skill_graph.js';

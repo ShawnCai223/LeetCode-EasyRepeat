@@ -111,6 +111,8 @@ export function renderVectors(problemList, containerId, isInteractive, options =
             ` : ''}
             <div class="vector-stats" style="flex-wrap: wrap;">
                 <span class="stat-tag ${diffStyle}">${difficultyText}</span>
+                ${problem.reinforce && problem.reinforce.mode === 'intensive' ? `<span class="stat-tag reinforce-tag reinforce-intensive">${t('popup_tag_intensive', {}, language)}</span>` : ''}
+                ${problem.reinforce && problem.reinforce.mode === 'relearn' ? `<span class="stat-tag reinforce-tag">${t('popup_tag_relearn', {}, language)}</span>` : ''}
                 <span class="stat-tag">${t('popup_interval_days', { days: interval }, language)}</span>
                 <span class="stat-tag">${t('popup_due_date', { date: nextReview }, language)}</span>
                 <div class="${actionGroupClass}">

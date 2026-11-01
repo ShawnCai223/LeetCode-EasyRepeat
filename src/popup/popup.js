@@ -25,6 +25,8 @@ let currentLeetCodeBase = 'https://leetcode.com';
 let currentLeave = { leaveDays: [], settings: null, isLeaveToday: false };
 let currentBatchSize = 3;
 let currentVisibleProblems = [];
+let currentLaterProblems = [];
+let currentPlanSummary = null;
 
 const LEETCODE_HOSTS = new Set(['leetcode.com', 'leetcode.cn']);
 
@@ -180,6 +182,177 @@ async function openReviewTabs(problemList) {
     if (first && chrome.tabs.update) {
         await chrome.tabs.update(first.id, { active: true });
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* Daily plan (每日题量均衡 + 加强复习)                                   */
+/* ------------------------------------------------------------------ */
+
+function getReinforcement() {
+    return (typeof window !== 'undefined' && window.Reinforcement) || null;
+}
+
+function getLoadBalancer() {
+    return (typeof window !== 'undefined' && window.LoadBalancer) || null;
+}
+
+const REINFORCE_BOOTSTRAP_KEY = 'reinforcementBootstrapped';
+
+/**
+ * Once: start relearn for problems whose last rating was <= 2.
+ * Daily: fill the intensive (一天多练) pool with the most stubborn problems.
+ * Returns the (possibly updated) problem map.
+ */
+async function runDailyMaintenance(problemMap, now) {
+    const R = getReinforcement();
+    if (!R) return problemMap;
+
+    const state = await chrome.storage.local.get({ [REINFORCE_BOOTSTRAP_KEY]: false, reviewPlan: null, reviewSettings: null });
+    let map = problemMap;
+    let changed = false;
+
+    if (!state[REINFORCE_BOOTSTRAP_KEY]) {
+        const next = {};
+        let count = 0;
+        for (const [slug, problem] of Object.entries(map)) {
+            const updated = R.bootstrapProblem(problem);
+            if (updated !== problem) count++;
+            next[slug] = updated;
+        }
+        map = next;
+        changed = count > 0;
+        console.log('[Popup] Reinforcement bootstrap: relearn started for', count, 'problems');
+    }
+
+    const poolSize = R.normalizePoolSize(state.reviewSettings ? state.reviewSettings.intensivePoolSize : undefined);
+    const { pool, promoted } = R.selectIntensivePool(map, poolSize);
+    if (promoted.length) {
+        map = { ...map };
+        for (const slug of promoted) map[slug] = R.promoteToIntensive(map[slug], now);
+        changed = true;
+    }
+
+    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? state.reviewPlan : {};
+    const samePool = Array.isArray(plan.intensive) && plan.intensive.length === pool.length && plan.intensive.every(s => pool.includes(s));
+
+    if (changed || !samePool || !state[REINFORCE_BOOTSTRAP_KEY]) {
+        // Re-read right before writing so a submission saved meanwhile is kept.
+        const fresh = await chrome.storage.local.get({ problems: {} });
+        const merged = { ...fresh.problems };
+        for (const [slug, problem] of Object.entries(map)) {
+            const latest = fresh.problems[slug];
+            const sameRecord = latest && (latest.history || []).length === (problem.history || []).length;
+            if (!latest || sameRecord) merged[slug] = problem;
+        }
+        await chrome.storage.local.set({
+            problems: merged,
+            reviewPlan: { ...plan, intensive: pool },
+            [REINFORCE_BOOTSTRAP_KEY]: true
+        });
+        return merged;
+    }
+    return map;
+}
+
+/**
+ * Today's queues from the load planner:
+ *   now   = do these now (planned for today + same-day practices that are due)
+ *   later = same-day practices due later today
+ */
+async function buildTodayQueues(problemMap, now) {
+    const LB = getLoadBalancer();
+    const all = Object.values(problemMap);
+    const endOfToday = getCurrentDate();
+    if (!LB) {
+        const due = all.filter(p => new Date(p.nextReviewDate) <= endOfToday)
+            .sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
+        return { now: due, later: [], summary: null };
+    }
+
+    const todayKey = LB.toKey(now);
+    const stored = await chrome.storage.local.get({ reviewPlan: null, leaveDays: [] });
+    const planState = stored.reviewPlan && typeof stored.reviewPlan === 'object' ? stored.reviewPlan : {};
+    let capacity = planState.capacityDate === todayKey ? Number(planState.capacity) : NaN;
+    if (!Number.isFinite(capacity) || capacity <= 0) {
+        capacity = LB.computeCapacity(problemMap, now, stored.leaveDays);
+        await chrome.storage.local.set({ reviewPlan: { ...planState, capacity, capacityDate: todayKey } });
+    }
+
+    const plan = LB.planReviews(problemMap, { today: now, leaveDays: stored.leaveDays, capacity });
+    const isIntensive = (p) => p.reinforce && p.reinforce.mode === 'intensive';
+    const nowList = [];
+    const later = [];
+    for (const slug of plan.today) {
+        const p = problemMap[slug];
+        if (!p) continue;
+        if (isIntensive(p) && new Date(p.nextReviewDate) > now) later.push(p);
+        else nowList.push(p);
+    }
+    // Same-day practices first, then the planner's priority order.
+    nowList.sort((a, b) => (isIntensive(b) ? 1 : 0) - (isIntensive(a) ? 1 : 0));
+    later.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
+
+    const plannedLoad = plan.today.reduce((sum, slug) => {
+        const p = problemMap[slug];
+        return sum + (p ? LB.weightOf(p) * (isIntensive(p) ? 2 : 1) : 0);
+    }, 0);
+
+    return {
+        now: nowList,
+        later,
+        summary: {
+            capacity: plan.capacity,
+            doneLoad: plan.doneLoad,
+            plannedLoad,
+            deferredCount: plan.deferredCount,
+            intensiveCount: Object.values(problemMap).filter(isIntensive).length,
+            isLeaveDay: plan.days[0].leave
+        }
+    };
+}
+
+function renderPlanStatus() {
+    const el = document.getElementById('plan-status');
+    if (!el) return;
+    const s = currentPlanSummary;
+    if (!s || currentView !== 'dashboard') {
+        el.style.display = 'none';
+        return;
+    }
+    el.style.display = 'block';
+    const parts = [t('popup_plan_load', { planned: s.plannedLoad, done: s.doneLoad, capacity: s.capacity })];
+    if (s.deferredCount > 0) parts.push(t('popup_plan_deferred', { count: s.deferredCount }));
+    if (s.intensiveCount > 0) parts.push(t('popup_plan_intensive', { count: s.intensiveCount }));
+    el.innerText = parts.join(' · ');
+    el.title = t('popup_plan_help');
+}
+
+function formatTime(iso) {
+    const d = new Date(iso);
+    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
+function renderLaterToday(isDashboard) {
+    const section = document.getElementById('later-section');
+    const title = document.getElementById('later-title');
+    if (!section) return;
+    if (!isDashboard || !currentLaterProblems.length) {
+        section.style.display = 'none';
+        return;
+    }
+    section.style.display = 'block';
+    if (title) {
+        title.innerText = t('popup_later_today', {
+            count: currentLaterProblems.length,
+            time: formatTime(currentLaterProblems[0].nextReviewDate)
+        });
+    }
+    renderVectors(currentLaterProblems, 'vector-list-later', false, {
+        language: currentLanguage,
+        titleCache: currentTitleCache,
+        problemUrlBase: currentLeetCodeBase,
+        onGo: (problem) => { void openReviewTabs([problem]); }
+    });
 }
 
 /* ------------------------------------------------------------------ */
@@ -353,7 +526,7 @@ function setupStorageListeners() {
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace !== 'local') return;
-        if (changes.problems || changes.localizedProblemTitles || changes.leaveDays || changes.leaveSettings) {
+        if (changes.problems || changes.localizedProblemTitles || changes.leaveDays || changes.leaveSettings || changes.reviewSettings) {
             void updateDashboard();
         }
     });
@@ -487,18 +660,21 @@ async function updateDashboard() {
     console.log('[Popup][DIAG] updateDashboard: START');
     const result = await chrome.storage.local.get({ problems: {}, localizedProblemTitles: {} });
     const now = getCurrentDate();
-    const problemMap = await applyArrivedLeaveDays(result.problems, now);
+    const leaveApplied = await applyArrivedLeaveDays(result.problems, now);
+    const problemMap = await runDailyMaintenance(leaveApplied, new Date());
     const problems = Object.values(problemMap);
 
     console.log('[Popup][DIAG] updateDashboard: total problems =', problems.length, ', now =', now.toISOString());
 
-    const dueProblems = problems.filter(problem => new Date(problem.nextReviewDate) <= now);
-    dueProblems.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
+    const queues = await buildTodayQueues(problemMap, new Date());
+    const dueProblems = queues.now;
     problems.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
 
-    console.log('[Popup][DIAG] updateDashboard: due =', dueProblems.length, ', all =', problems.length);
+    console.log('[Popup][DIAG] updateDashboard: due =', dueProblems.length, ', later =', queues.later.length, ', all =', problems.length);
 
     currentDueProblems = dueProblems;
+    currentLaterProblems = queues.later;
+    currentPlanSummary = queues.summary;
     currentAllProblems = problems;
     currentTitleCache = result.localizedProblemTitles || {};
 
@@ -572,6 +748,8 @@ function rerenderCurrentView() {
     updateQueueTitle();
     renderBatchBar();
     renderLeaveBar();
+    renderPlanStatus();
+    renderLaterToday(isDashboard);
     syncSidebarState();
 }
 
@@ -886,12 +1064,31 @@ async function updateProblemSRS(slug, ease) {
         nextStep = calculateNextReview(problem.interval, problem.repetition, ease, now);
     }
 
+    const R = getReinforcement();
+    let reinforceDecision = null;
+    if (R) {
+        try {
+            const ctx = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null });
+            reinforceDecision = R.scheduleAfterReview({
+                problem,
+                rating,
+                now: new Date(),
+                fsrsNextReviewDate: nextStep.nextReviewDate,
+                intensiveSlugs: (ctx.reviewPlan && ctx.reviewPlan.intensive) || [],
+                poolSize: ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined
+            });
+        } catch (e) {
+            console.warn('[Popup] Reinforcement scheduling skipped:', e);
+        }
+    }
+
     problems[slug] = {
         ...problem,
+        ...(reinforceDecision ? { reinforce: reinforceDecision.reinforce } : {}),
         interval: nextStep.nextInterval,
         repetition: nextStep.nextRepetition,
         easeFactor: nextStep.nextEaseFactor,
-        nextReviewDate: nextStep.nextReviewDate,
+        nextReviewDate: reinforceDecision ? reinforceDecision.nextReviewDate : nextStep.nextReviewDate,
         fsrs_stability: nextStep.fsrs_stability,
         fsrs_difficulty: nextStep.fsrs_difficulty,
         fsrs_state: nextStep.fsrs_state,

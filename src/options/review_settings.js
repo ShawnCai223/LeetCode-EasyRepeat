@@ -14,16 +14,20 @@ const STRINGS = {
         rv_heading: '🔁 Reinforcement & daily plan',
         rv_rules: [
             'Rating guide: Easy = wrote it and can explain it · Good = wrote it, can\'t explain it · Hard = wrote it with hints · Again = couldn\'t write it.',
-            'Hard or Again on the latest attempt always triggers short-term review: again after 1, 3 and 7 days, then back to the normal schedule.',
-            'A problem rated Hard/Again 3 times in a row is "stubborn": it is practised 2× a day (3× if it keeps failing), 3 hours apart, until it is rated Good/Easy twice in a row. You get a notification for each extra practice.',
-            'Daily load is balanced automatically (Easy 1 / Medium 2 / Hard 3; capacity = average of the next 14 days), so a backlog after leave or a missed day is spread out.'
+            'New problem rated Good/Easy the first time: reviewed again after 3, 8 and 20 days, then the normal schedule.',
+            'Hard or Again always triggers short-term review: after 1, 3 and 7 days, then the normal schedule. A bad rating during these steps goes back one step.',
+            'A problem rated Hard/Again 3 times in a row is "stubborn": practised 2× a day (3× if it keeps failing), 4 hours apart, until rated Good/Easy twice in a row. You get a notification for each extra practice.',
+            'Daily budget follows your average over your last 14 active days (new problems included), or the number below. Weak problems from your history are queued and let in as the budget allows.'
         ],
+        rv_budget_label: 'About how many problems a day (blank = automatic)',
+        rv_budget_hint: 'Includes new problems. With 3 a day, about 2–3 new problems a week fit; with 5 a day, about 3–4. Blank = follow your recent pace (it only goes up automatically; lower it here).',
+        rv_budget_invalid: 'Enter a whole number from 1 to 50, or leave it blank.',
         rv_pool_label: 'Stubborn problems practised several times a day (at once)',
         rv_pool_hint: 'Others wait in short-interval review until a slot frees up. 0 turns multi-practice off.',
         rv_save: 'Save',
         rv_saved: '✅ Saved.',
         rv_invalid: 'Enter a whole number from 0 to {max}.',
-        rv_status: 'Now: {intensive} in multi-practice · {stubborn} stubborn · {relearn} in short-term review',
+        rv_status: 'Now: {intensive} in multi-practice · {stubborn} stubborn · {relearn} in short-term review · {queued} queued',
         im_heading: '📥 Merge-import review history',
         im_hint: 'Merge the review history from a backup JSON into your current data. Unlike "Restore", nothing is replaced: histories are combined, the most recent schedule wins, notes are kept, settings and keys are not touched.',
         im_button: 'Choose Backup JSON to Merge',
@@ -38,16 +42,20 @@ const STRINGS = {
         rv_heading: '🔁 加强复习与每日计划',
         rv_rules: [
             '评分含义：简单 = 会写会说 · 正常 = 会写不会说 · 困难 = 按照提示写了出来 · 重来 = 完全不会写。',
-            '最近一次评「困难」或「重来」，不管以前表现如何，都会进入短期加强：1 天、3 天、7 天后各复习一次，然后回到正常排期。',
-            '连续 3 次评「困难/重来」的题算「顽固题」：一天练 2 次（一直失败则 3 次），间隔 3 小时，直到连续 2 次评「正常/简单」。每次加练都会弹系统通知。',
-            '每天的题量自动均衡（简单 1 / 中等 2 / 困难 3；容量 = 未来 14 天的平均负荷），请假或漏签积压的题会被均匀摊开。'
+            '新题第一次就评「正常/简单」：隔 3 天、8 天、20 天各复习一次，然后回到正常排期。',
+            '评「困难」或「重来」，不管以前表现如何，都会进入短期加强：隔 1 天、3 天、7 天各复习一次；加强期间再评差，退回一步。',
+            '连续 3 次评「困难/重来」的题算「顽固题」：一天练 2 次（一直失败则 3 次），间隔 4 小时，直到连续 2 次评「正常/简单」。每次加练都会弹系统通知。',
+            '每天的预算取你最近 14 个做题日的平均（含新题），也可以在下面填固定题数。历史里的薄弱题先排队，预算有余量时再逐步放进来。'
         ],
+        rv_budget_label: '每天大概做几题（留空 = 自动）',
+        rv_budget_hint: '包含新题。每天 3 题大约每周能学 2–3 道新题，每天 5 题大约 3–4 道。留空 = 跟随你最近的节奏（只会自动调高，想调低就在这里填）。',
+        rv_budget_invalid: '请输入 1 到 50 的整数，或者留空。',
         rv_pool_label: '同时一天多练的顽固题数量',
         rv_pool_hint: '其余顽固题先走短间隔加强，有空位时按最顽固的顺序补进来。填 0 关闭一天多练。',
         rv_save: '保存',
         rv_saved: '✅ 已保存。',
         rv_invalid: '请输入 0 到 {max} 的整数。',
-        rv_status: '当前：{intensive} 题一天多练 · {stubborn} 道顽固题 · {relearn} 题在短期加强',
+        rv_status: '当前：{intensive} 题一天多练 · {stubborn} 道顽固题 · {relearn} 题在短期加强 · {queued} 道排队中',
         im_heading: '📥 合并导入历史记录',
         im_hint: '把备份 JSON 里的做题历史合并进当前数据。和「从备份文件恢复」不同，这里不会覆盖任何东西：历史记录合并，排期以最近一次复习为准，笔记都保留，设置和密钥不动。',
         im_button: '选择要合并的备份 JSON',
@@ -89,6 +97,11 @@ function buildReviewCard() {
         <h2 data-rv="rv_heading"></h2>
         <ul class="hint" id="rv-rules" style="margin: 6px 0 12px; padding-left: 18px;"></ul>
         <div class="grid" style="gap: 15px;">
+            <div class="field">
+                <label for="rv-budget" data-rv="rv_budget_label"></label>
+                <input type="number" id="rv-budget" min="1" max="50" step="1">
+                <span class="hint" data-rv="rv_budget_hint"></span>
+            </div>
             <div class="field">
                 <label for="rv-pool" data-rv="rv_pool_label"></label>
                 <input type="number" id="rv-pool" min="0" step="1">
@@ -137,11 +150,17 @@ async function renderReview(card) {
     if (document.activeElement !== input) {
         input.value = String(Rx.normalizePoolSize(state.reviewSettings ? state.reviewSettings.intensivePoolSize : undefined));
     }
+    const budget = card.querySelector('#rv-budget');
+    if (document.activeElement !== budget) {
+        const n = Number(state.reviewSettings && state.reviewSettings.dailyProblems);
+        budget.value = Number.isFinite(n) && n > 0 ? String(n) : '';
+    }
     const all = Object.values(state.problems || {});
     card.querySelector('#rv-status').textContent = t('rv_status', {
         intensive: all.filter(p => p && p.reinforce && p.reinforce.mode === 'intensive').length,
         stubborn: all.filter(p => p && Rx.isStubborn(p.history)).length,
-        relearn: all.filter(p => p && p.reinforce && p.reinforce.mode === 'relearn').length
+        relearn: all.filter(p => p && p.reinforce && p.reinforce.mode === 'relearn').length,
+        queued: all.filter(p => p && p.reinforce && p.reinforce.mode === 'queued').length
     });
 }
 
@@ -222,8 +241,20 @@ async function init() {
             setStatus(statusEl, t('rv_invalid', { max }), 'error');
             return;
         }
-        const cur = await chrome.storage.local.get({ reviewSettings: {} });
-        await chrome.storage.local.set({ reviewSettings: { ...(cur.reviewSettings || {}), intensivePoolSize: n } });
+        const rawBudget = reviewCard.querySelector('#rv-budget').value.trim();
+        const budget = Number(rawBudget);
+        if (rawBudget !== '' && (!Number.isInteger(budget) || budget < 1 || budget > 50)) {
+            setStatus(statusEl, t('rv_budget_invalid'), 'error');
+            return;
+        }
+        const cur = await chrome.storage.local.get({ reviewSettings: {}, reviewPlan: null });
+        const nextSettings = { ...(cur.reviewSettings || {}), intensivePoolSize: n };
+        if (rawBudget === '') delete nextSettings.dailyProblems;
+        else nextSettings.dailyProblems = budget;
+        // Drop today's frozen budget so the change applies right away.
+        const plan = cur.reviewPlan && typeof cur.reviewPlan === 'object' ? { ...cur.reviewPlan } : null;
+        if (plan) delete plan.capacityDate;
+        await chrome.storage.local.set(plan ? { reviewSettings: nextSettings, reviewPlan: plan } : { reviewSettings: nextSettings });
         setStatus(statusEl, t('rv_saved'), 'ok');
         await renderReview(reviewCard);
     });

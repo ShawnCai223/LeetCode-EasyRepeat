@@ -196,18 +196,24 @@ function getLoadBalancer() {
     return (typeof window !== 'undefined' && window.LoadBalancer) || null;
 }
 
-const REINFORCE_BOOTSTRAP_KEY = 'reinforcementBootstrapped';
+const REINFORCE_BOOTSTRAP_KEY = 'reinforcementBootstrappedV2';
 
 /**
- * Once: start relearn for problems whose last rating was <= 2.
- * Daily: fill the intensive (一天多练) pool with the most stubborn problems.
+ * Daily upkeep before planning:
+ * - once: weak problems from before (last rating <= 2) go into the queue;
+ * - once a day: freeze today's budget, admit queued problems that fit it,
+ *   and fill the multi-practice pool from the most stubborn admitted problems.
  * Returns the (possibly updated) problem map.
  */
 async function runDailyMaintenance(problemMap, now) {
     const R = getReinforcement();
-    if (!R) return problemMap;
+    const LB = getLoadBalancer();
+    if (!R || !LB) return problemMap;
 
     const state = await chrome.storage.local.get({ [REINFORCE_BOOTSTRAP_KEY]: false, reviewPlan: null, reviewSettings: null });
+    const settings = state.reviewSettings || {};
+    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? { ...state.reviewPlan } : {};
+    const todayKey = LB.toKey(now);
     let map = problemMap;
     let changed = false;
 
@@ -221,37 +227,53 @@ async function runDailyMaintenance(problemMap, now) {
         }
         map = next;
         changed = count > 0;
-        console.log('[Popup] Reinforcement bootstrap: relearn started for', count, 'problems');
+        console.log('[Popup] Reinforcement setup: queued', count, 'weak problems');
     }
 
-    const poolSize = R.normalizePoolSize(state.reviewSettings ? state.reviewSettings.intensivePoolSize : undefined);
+    if (plan.capacityDate !== todayKey || !(Number(plan.capacity) > 0)) {
+        const fixed = Number(settings.dailyProblems) > 0;
+        plan.capacity = LB.computeCapacity(map, now, settings, {}, fixed ? 0 : plan.autoCapacity);
+        if (!fixed) plan.autoCapacity = plan.capacity;
+        plan.capacityDate = todayKey;
+    }
+
+    if (plan.admittedDate !== todayKey) {
+        const { admit } = LB.chooseAdmissions(map, plan.capacity);
+        if (admit.length) {
+            map = { ...map };
+            for (const slug of admit) map[slug] = R.admitQueued(map[slug], now);
+            changed = true;
+            console.log('[Popup] Admitted from queue:', admit);
+        }
+        plan.admittedDate = todayKey;
+    }
+
+    const poolSize = R.normalizePoolSize(settings.intensivePoolSize);
     const { pool, promoted } = R.selectIntensivePool(map, poolSize);
     if (promoted.length) {
         map = { ...map };
         for (const slug of promoted) map[slug] = R.promoteToIntensive(map[slug], now);
         changed = true;
     }
+    plan.intensive = pool;
 
-    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? state.reviewPlan : {};
-    const samePool = Array.isArray(plan.intensive) && plan.intensive.length === pool.length && plan.intensive.every(s => pool.includes(s));
+    const planChanged = JSON.stringify(plan) !== JSON.stringify(state.reviewPlan || {});
+    if (!changed && !planChanged && state[REINFORCE_BOOTSTRAP_KEY]) return map;
 
-    if (changed || !samePool || !state[REINFORCE_BOOTSTRAP_KEY]) {
-        // Re-read right before writing so a submission saved meanwhile is kept.
-        const fresh = await chrome.storage.local.get({ problems: {} });
-        const merged = { ...fresh.problems };
-        for (const [slug, problem] of Object.entries(map)) {
-            const latest = fresh.problems[slug];
-            const sameRecord = latest && (latest.history || []).length === (problem.history || []).length;
-            if (!latest || sameRecord) merged[slug] = problem;
-        }
-        await chrome.storage.local.set({
-            problems: merged,
-            reviewPlan: { ...plan, intensive: pool },
-            [REINFORCE_BOOTSTRAP_KEY]: true
-        });
-        return merged;
+    // Re-read right before writing so a submission saved meanwhile is kept.
+    const fresh = await chrome.storage.local.get({ problems: {} });
+    const merged = { ...fresh.problems };
+    for (const [slug, problem] of Object.entries(map)) {
+        const latest = fresh.problems[slug];
+        const sameRecord = latest && (latest.history || []).length === (problem.history || []).length;
+        if (!latest || sameRecord) merged[slug] = problem;
     }
-    return map;
+    await chrome.storage.local.set({
+        ...(changed ? { problems: merged } : {}),
+        reviewPlan: plan,
+        [REINFORCE_BOOTSTRAP_KEY]: true
+    });
+    return changed ? merged : map;
 }
 
 /**
@@ -269,13 +291,11 @@ async function buildTodayQueues(problemMap, now) {
         return { now: due, later: [], summary: null };
     }
 
-    const todayKey = LB.toKey(now);
-    const stored = await chrome.storage.local.get({ reviewPlan: null, leaveDays: [] });
+    const stored = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null, leaveDays: [] });
     const planState = stored.reviewPlan && typeof stored.reviewPlan === 'object' ? stored.reviewPlan : {};
-    let capacity = planState.capacityDate === todayKey ? Number(planState.capacity) : NaN;
+    let capacity = planState.capacityDate === LB.toKey(now) ? Number(planState.capacity) : NaN;
     if (!Number.isFinite(capacity) || capacity <= 0) {
-        capacity = LB.computeCapacity(problemMap, now, stored.leaveDays);
-        await chrome.storage.local.set({ reviewPlan: { ...planState, capacity, capacityDate: todayKey } });
+        capacity = LB.computeCapacity(problemMap, now, stored.reviewSettings || {});
     }
 
     const plan = LB.planReviews(problemMap, { today: now, leaveDays: stored.leaveDays, capacity });
@@ -292,21 +312,31 @@ async function buildTodayQueues(problemMap, now) {
     nowList.sort((a, b) => (isIntensive(b) ? 1 : 0) - (isIntensive(a) ? 1 : 0));
     later.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
 
-    const plannedLoad = plan.today.reduce((sum, slug) => {
-        const p = problemMap[slug];
-        return sum + (p ? LB.weightOf(p) * (isIntensive(p) ? 2 : 1) : 0);
-    }, 0);
+    const avgWeight = LB.averageWeight(problemMap);
+    const advice = LB.newProblemAdvice({
+        capacity: plan.capacity,
+        projected: LB.projectedDailyLoad(problemMap),
+        doneLoad: plan.doneLoad,
+        plannedLoad: plan.plannedRegularLoad,
+        deferredLoad: plan.deferredLoad,
+        avgWeight,
+        queuedCount: all.filter(p => p.reinforce && p.reinforce.mode === 'queued').length
+    });
 
     return {
         now: nowList,
         later,
         summary: {
             capacity: plan.capacity,
+            capacityProblems: Math.max(1, Math.round(plan.capacity / avgWeight)),
             doneLoad: plan.doneLoad,
-            plannedLoad,
+            plannedLoad: plan.plannedRegularLoad,
             deferredCount: plan.deferredCount,
-            intensiveCount: Object.values(problemMap).filter(isIntensive).length,
-            isLeaveDay: plan.days[0].leave
+            intensiveCount: all.filter(isIntensive).length,
+            queuedCount: all.filter(p => p.reinforce && p.reinforce.mode === 'queued').length,
+            isLeaveDay: plan.days[0].leave,
+            advice,
+            fixedBudget: Number(stored.reviewSettings && stored.reviewSettings.dailyProblems) > 0
         }
     };
 }
@@ -320,10 +350,14 @@ function renderPlanStatus() {
         return;
     }
     el.style.display = 'block';
-    const parts = [t('popup_plan_load', { planned: s.plannedLoad, done: s.doneLoad, capacity: s.capacity })];
-    if (s.deferredCount > 0) parts.push(t('popup_plan_deferred', { count: s.deferredCount }));
-    if (s.intensiveCount > 0) parts.push(t('popup_plan_intensive', { count: s.intensiveCount }));
-    el.innerText = parts.join(' · ');
+    const line1 = [t('popup_plan_load', { planned: s.plannedLoad, done: s.doneLoad, capacity: s.capacity, problems: s.capacityProblems })];
+    if (s.deferredCount > 0) line1.push(t('popup_plan_deferred', { count: s.deferredCount }));
+    if (s.intensiveCount > 0) line1.push(t('popup_plan_intensive', { count: s.intensiveCount }));
+    if (s.queuedCount > 0) line1.push(t('popup_plan_queued', { count: s.queuedCount }));
+    const line2 = s.advice.pause
+        ? t('popup_new_pause')
+        : t('popup_new_advice', { today: s.advice.today, week: s.advice.perWeek });
+    el.innerText = `${line1.join(' · ')}\n${line2}`;
     el.title = t('popup_plan_help');
 }
 
@@ -1093,7 +1127,10 @@ async function updateProblemSRS(slug, ease) {
         fsrs_difficulty: nextStep.fsrs_difficulty,
         fsrs_state: nextStep.fsrs_state,
         fsrs_last_review: nextStep.fsrs_last_review,
-        history: [...problem.history, { date: nowISO, status: 'Reviewed', rating }]
+        history: [...problem.history, {
+            date: nowISO, status: 'Reviewed', rating,
+            ...(problem.reinforce && problem.reinforce.mode === 'intensive' ? { extra: true } : {})
+        }]
     };
 
     await chrome.storage.local.set({ problems });

@@ -96,6 +96,7 @@ describe('saveSubmission with reinforcement', () => {
         const r2 = await saveSubmission('I', 'i', 'Medium', 'test', 3, []);
         expect(r2).toMatchObject({ success: true });
         expect(mock.store.problems.i.history).toHaveLength(4);
+        expect(mock.store.problems.i.history[3].extra).toBe(true); // multi-practice is outside the daily budget
         expect(mock.store.problems.i.reinforce).toMatchObject({ mode: 'intensive', goodStreak: 1 });
     });
 

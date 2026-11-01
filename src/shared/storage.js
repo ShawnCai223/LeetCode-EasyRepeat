@@ -186,7 +186,13 @@
             fsrs_state: nextStep.fsrs_state !== undefined ? nextStep.fsrs_state : currentProblem.fsrs_state,
             fsrs_last_review: nextStep.fsrs_last_review !== undefined ? nextStep.fsrs_last_review : currentProblem.fsrs_last_review,
             topics: (topics && topics.length > 0) ? topics : (currentProblem.topics || []),
-            history: [...currentProblem.history, { date: nowISO, status: difficultySource === 'api_poll_fail' ? 'Wrong Answer' : 'Accepted', rating: rating }]
+            history: [...currentProblem.history, {
+                date: nowISO,
+                status: difficultySource === 'api_poll_fail' ? 'Wrong Answer' : 'Accepted',
+                rating: rating,
+                // Multi-practice (一天多练) reviews are outside the daily budget.
+                ...(currentProblem.reinforce && currentProblem.reinforce.mode === 'intensive' ? { extra: true } : {})
+            }]
         };
 
         // Reinforcement (加强复习) may bring the next review earlier than FSRS.

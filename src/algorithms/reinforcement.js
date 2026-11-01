@@ -11,13 +11,18 @@
  *   1 Again = 完全不会写        (couldn't write it)
  *
  * Rules:
+ * - New problem, first review rated >= 3: "consolidate" — reviewed again
+ *   after gaps of 3, 8 and 20 days, then plain FSRS. Rated <= 2 → relearn.
  * - Any rating <= 2 means the problem needs reinforcement *now*, whatever its
  *   history: it enters "relearn" with steps of 1, 3, 7 days (never later than
  *   FSRS would schedule). Each rating >= 3 advances one step; after the last
- *   step it goes back to plain FSRS. Another rating <= 2 restarts the steps.
+ *   step it goes back to plain FSRS. A rating <= 2 during relearn steps back
+ *   one step (not back to the start).
+ * - Existing weak problems found at setup/import are "queued": not scheduled
+ *   until the daily plan has room for them (see LoadBalancer.admitQueued).
  * - "Stubborn" = the last 3 ratings in a row were <= 2. Stubborn problems go
  *   into "intensive" mode (练 2 次/天, or 3 次/天 when the last 3 were all
- *   rating 1 or the weak streak is >= 5), spaced 3 hours apart within the day.
+ *   rating 1 or the weak streak is >= 5), spaced 4 hours apart within the day.
  *   Only a small pool of problems is intensive at once (default 3), so the
  *   daily load stays doable; the rest stay in relearn until a slot frees up.
  * - An intensive problem leaves intensive mode after 2 ratings >= 3 in a row
@@ -25,7 +30,7 @@
  *   keeps it intensive and resets that count.
  *
  * Problem fields used/written:
- *   problem.reinforce = { mode: 'relearn'|'intensive', step, goodStreak, intraday, since }
+ *   problem.reinforce = { mode: 'consolidate'|'relearn'|'intensive'|'queued', step, goodStreak, intraday, since }
  */
 (function (root, factory) {
     const exports = factory();
@@ -38,9 +43,10 @@
 }(typeof self !== 'undefined' ? self : (typeof window !== 'undefined' ? window : this), function () {
 
     const RELEARN_STEPS_DAYS = [1, 3, 7];
+    const CONSOLIDATE_STEPS_DAYS = [3, 8, 20];
     const STUBBORN_STREAK = 3;
     const HEAVY_STREAK = 5;
-    const INTRADAY_GAP_HOURS = 3;
+    const INTRADAY_GAP_HOURS = 4;
     const LAST_INTRADAY_HOUR = 23; // no same-day practice scheduled after 23:00 local
     const EXIT_INTENSIVE_GOOD_STREAK = 2;
     const DEFAULT_POOL_SIZE = 3;
@@ -146,6 +152,14 @@
         return minDate(fsrsDate, addDays(now, RELEARN_STEPS_DAYS[step]));
     }
 
+    function modeOf(problem) {
+        return problem && problem.reinforce ? problem.reinforce.mode : null;
+    }
+
+    function isQueued(problem) {
+        return modeOf(problem) === 'queued';
+    }
+
     /**
      * Decide schedule overrides after a review.
      *
@@ -195,15 +209,39 @@
                     leftIntensive: false
                 };
             }
+            // Relearn: a bad rating steps back one step instead of restarting.
+            const inRelearn = prev && prev.mode === 'relearn';
+            const step = inRelearn ? Math.max(0, (Number(prev.step) || 0) - 1) : 0;
             return {
-                nextReviewDate: relearnDue(0, nowDate, fsrsDate).toISOString(),
-                reinforce: { mode: 'relearn', step: 0, goodStreak: 0, intraday: false, since: nowISO },
+                nextReviewDate: relearnDue(step, nowDate, fsrsDate).toISOString(),
+                reinforce: { mode: 'relearn', step, goodStreak: 0, intraday: false, since: inRelearn && prev.since ? prev.since : nowISO },
                 joinedIntensive: false,
                 leftIntensive: wasIntensive
             };
         }
 
         // rating >= 3
+        const isFirstReview = sortedHistory(problem && problem.history).length === 0;
+        if (isFirstReview) {
+            return {
+                nextReviewDate: addDays(nowDate, CONSOLIDATE_STEPS_DAYS[0]).toISOString(),
+                reinforce: { mode: 'consolidate', step: 0, goodStreak: 0, intraday: false, since: nowISO },
+                joinedIntensive: false,
+                leftIntensive: false
+            };
+        }
+
+        if (prev && prev.mode === 'consolidate') {
+            const step = (Number(prev.step) || 0) + 1;
+            if (step < CONSOLIDATE_STEPS_DAYS.length) {
+                return {
+                    nextReviewDate: addDays(nowDate, CONSOLIDATE_STEPS_DAYS[step]).toISOString(),
+                    reinforce: { ...prev, step, intraday: false },
+                    joinedIntensive: false,
+                    leftIntensive: false
+                };
+            }
+        }
         if (wasIntensive) {
             const goodStreak = (Number(prev.goodStreak) || 0) + 1;
             if (goodStreak >= EXIT_INTENSIVE_GOOD_STREAK) {
@@ -251,22 +289,28 @@
     }
 
     /**
-     * One-time setup for problems recorded before reinforcement existed:
-     * a last rating <= 2 starts the relearn steps (due no later than 1 day
-     * after that review). Returns a new problem object or the same one.
+     * One-time setup for problems recorded before reinforcement existed (or
+     * imported): a last rating <= 2 puts the problem in the queue. Queued
+     * problems are not planned until the daily plan admits them.
+     * Returns a new problem object or the same one.
      */
     function bootstrapProblem(problem) {
         if (!problem || problem.reinforce) return problem;
         const rated = ratedHistory(problem.history);
         if (!rated.length || Number(rated[rated.length - 1].rating) > 2) return problem;
-        const lastAt = new Date(rated[rated.length - 1].date);
-        const current = problem.nextReviewDate ? new Date(problem.nextReviewDate) : null;
-        const stepDue = addDays(lastAt, RELEARN_STEPS_DAYS[0]);
-        const due = current && Number.isFinite(current.getTime()) ? minDate(current, stepDue) : stepDue;
         return {
             ...problem,
-            nextReviewDate: due.toISOString(),
-            reinforce: { mode: 'relearn', step: 0, goodStreak: 0, intraday: false, since: lastAt.toISOString() }
+            reinforce: { mode: 'queued', step: 0, goodStreak: 0, intraday: false, since: new Date(rated[rated.length - 1].date).toISOString() }
+        };
+    }
+
+    /** Take a queued problem into relearn, due now. */
+    function admitQueued(problem, now) {
+        const nowDate = now instanceof Date ? now : new Date(now);
+        return {
+            ...problem,
+            nextReviewDate: nowDate.toISOString(),
+            reinforce: { mode: 'relearn', step: 0, goodStreak: 0, intraday: false, since: nowDate.toISOString() }
         };
     }
 
@@ -284,7 +328,7 @@
         const promoted = [];
         if (pool.length < size) {
             const candidates = all
-                .filter(p => !pool.includes(p.slug) && isStubborn(p.history))
+                .filter(p => !pool.includes(p.slug) && !isQueued(p) && isStubborn(p.history))
                 .map(p => ({ slug: p.slug, streak: weakStreak(p.history), w: weight[String(p.difficulty || 'medium').toLowerCase()] || 2 }))
                 .sort((a, b) => b.streak - a.streak || b.w - a.w || (a.slug < b.slug ? -1 : 1));
             for (const c of candidates) {
@@ -310,6 +354,7 @@
 
     return {
         RELEARN_STEPS_DAYS,
+        CONSOLIDATE_STEPS_DAYS,
         STUBBORN_STREAK,
         INTRADAY_GAP_HOURS,
         DEFAULT_POOL_SIZE,
@@ -325,6 +370,8 @@
         scheduleAfterReview,
         allowsSameDayReview,
         bootstrapProblem,
+        admitQueued,
+        isQueued,
         selectIntensivePool,
         promoteToIntensive
     };

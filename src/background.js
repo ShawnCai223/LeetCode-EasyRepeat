@@ -355,7 +355,8 @@ async function autoSaveSessionAsAgain(session) {
         topics: (session.topics && session.topics.length > 0) ? session.topics : (current.topics || []),
         history: [...(current.history || []), {
             date: nowISO, status: 'Wrong Answer',
-            rating: 1
+            rating: 1,
+            ...(current.reinforce && current.reinforce.mode === 'intensive' ? { extra: true } : {})
         }]
     };
 

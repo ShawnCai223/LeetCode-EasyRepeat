@@ -64,13 +64,13 @@ describe('scheduleAfterReview', () => {
         expect(r.nextReviewDate).toBe(fsrsSoon);
     });
 
-    test('3rd weak rating in a row -> intensive, next practice 3h later same day', () => {
+    test('3rd weak rating in a row -> intensive, next practice 4h later same day', () => {
         const problem = { slug: 'p', history: [h('2026-10-18T10:00', 2), h('2026-10-19T10:00', 1)] };
         const now = at('2026-10-20T10:00');
         const r = R.scheduleAfterReview({ problem, rating: 2, now, fsrsNextReviewDate: fsrsLate, intensiveSlugs: [] });
         expect(r.reinforce).toMatchObject({ mode: 'intensive', intraday: true, goodStreak: 0 });
         expect(r.joinedIntensive).toBe(true);
-        expect(new Date(r.nextReviewDate).getTime() - now.getTime()).toBe(3 * 3600 * 1000);
+        expect(new Date(r.nextReviewDate).getTime() - now.getTime()).toBe(4 * 3600 * 1000);
     });
 
     test('pool full -> stubborn problem waits in relearn', () => {
@@ -127,8 +127,45 @@ describe('scheduleAfterReview', () => {
     });
 
     test('plain good review without reinforcement keeps FSRS date', () => {
-        const r = R.scheduleAfterReview({ problem: { slug: 'p', history: [] }, rating: 3, now: at('2026-10-20T10:00'), fsrsNextReviewDate: fsrsLate });
+        const r = R.scheduleAfterReview({ problem: { slug: 'p', history: [h('2026-09-20T10:00', 3)] }, rating: 3, now: at('2026-10-20T10:00'), fsrsNextReviewDate: fsrsLate });
         expect(r).toMatchObject({ nextReviewDate: fsrsLate, reinforce: null });
+    });
+
+    test('new problem rated Good/Easy: consolidate after 3, 8, 20 days, then FSRS', () => {
+        let problem = { slug: 'n', history: [] };
+        let r = R.scheduleAfterReview({ problem, rating: 4, now: at('2026-10-01T10:00'), fsrsNextReviewDate: fsrsLate });
+        expect(r.reinforce).toMatchObject({ mode: 'consolidate', step: 0 });
+        expect(dayKey(r.nextReviewDate)).toBe('2026-10-04');
+
+        problem = { slug: 'n', reinforce: r.reinforce, history: [h('2026-10-01T10:00', 4)] };
+        r = R.scheduleAfterReview({ problem, rating: 3, now: at('2026-10-04T10:00'), fsrsNextReviewDate: fsrsLate });
+        expect(r.reinforce.step).toBe(1);
+        expect(dayKey(r.nextReviewDate)).toBe('2026-10-12');
+
+        problem = { ...problem, reinforce: r.reinforce, history: [...problem.history, h('2026-10-04T10:00', 3)] };
+        r = R.scheduleAfterReview({ problem, rating: 3, now: at('2026-10-12T10:00'), fsrsNextReviewDate: fsrsLate });
+        expect(r.reinforce.step).toBe(2);
+        expect(dayKey(r.nextReviewDate)).toBe('2026-11-01');
+
+        problem = { ...problem, reinforce: r.reinforce, history: [...problem.history, h('2026-10-12T10:00', 3)] };
+        r = R.scheduleAfterReview({ problem, rating: 3, now: at('2026-11-01T10:00'), fsrsNextReviewDate: fsrsLate });
+        expect(r).toMatchObject({ reinforce: null, nextReviewDate: fsrsLate });
+    });
+
+    test('new problem rated badly goes to relearn; a bad rating while consolidating too', () => {
+        const first = R.scheduleAfterReview({ problem: { slug: 'n', history: [] }, rating: 2, now: at('2026-10-01T10:00'), fsrsNextReviewDate: fsrsLate });
+        expect(first.reinforce).toMatchObject({ mode: 'relearn', step: 0 });
+        const consolidating = { slug: 'n', reinforce: { mode: 'consolidate', step: 1 }, history: [h('2026-10-01T10:00', 3), h('2026-10-04T10:00', 3)] };
+        const r = R.scheduleAfterReview({ problem: consolidating, rating: 1, now: at('2026-10-12T10:00'), fsrsNextReviewDate: fsrsLate });
+        expect(r.reinforce).toMatchObject({ mode: 'relearn', step: 0 });
+        expect(dayKey(r.nextReviewDate)).toBe('2026-10-13');
+    });
+
+    test('a bad rating during relearn steps back one step, not to the start', () => {
+        const problem = { slug: 'p', reinforce: { mode: 'relearn', step: 2, since: 's' }, history: [h('2026-10-01T10:00', 1), h('2026-10-02T10:00', 3), h('2026-10-05T10:00', 3)] };
+        const r = R.scheduleAfterReview({ problem, rating: 2, now: at('2026-10-12T10:00'), fsrsNextReviewDate: fsrsLate });
+        expect(r.reinforce).toMatchObject({ mode: 'relearn', step: 1, since: 's' });
+        expect(dayKey(r.nextReviewDate)).toBe('2026-10-15');
     });
 });
 
@@ -140,14 +177,25 @@ describe('same-day review and setup helpers', () => {
         expect(R.allowsSameDayReview({ ...due, reinforce: { mode: 'relearn' } }, at('2026-10-20T14:00'))).toBe(false);
     });
 
-    test('bootstrap starts relearn for last rating <= 2 only', () => {
+    test('setup queues problems whose last rating was <= 2; admission starts relearn now', () => {
         const weak = { slug: 'w', nextReviewDate: at('2026-11-30T10:00').toISOString(), history: [h('2026-10-01T10:00', 4), h('2026-10-20T10:00', 2)] };
         const fine = { slug: 'f', nextReviewDate: at('2026-11-30T10:00').toISOString(), history: [h('2026-10-20T10:00', 3)] };
         const b = R.bootstrapProblem(weak);
-        expect(b.reinforce.mode).toBe('relearn');
-        expect(dayKey(b.nextReviewDate)).toBe('2026-10-21');
+        expect(b.reinforce.mode).toBe('queued');
+        expect(b.nextReviewDate).toBe(weak.nextReviewDate);
+        expect(R.isQueued(b)).toBe(true);
         expect(R.bootstrapProblem(fine)).toBe(fine);
         expect(R.bootstrapProblem(b)).toBe(b); // idempotent
+        const now = at('2026-11-01T09:00');
+        const a = R.admitQueued(b, now);
+        expect(a.reinforce).toMatchObject({ mode: 'relearn', step: 0 });
+        expect(a.nextReviewDate).toBe(now.toISOString());
+    });
+
+    test('queued problems are not promoted to multi-practice', () => {
+        const mk = (slug, ratings, extra = {}) => ({ slug, difficulty: 'Medium', history: ratings.map((r, i) => h(`2026-10-1${i}T10:00`, r)), ...extra });
+        const problems = { q: mk('q', [1, 1, 1, 1], { reinforce: { mode: 'queued' } }), a: mk('a', [2, 2, 2], { reinforce: { mode: 'relearn' } }) };
+        expect(R.selectIntensivePool(problems, 3).pool).toEqual(['a']);
     });
 
     test('pool keeps current intensive problems and fills with the most stubborn', () => {

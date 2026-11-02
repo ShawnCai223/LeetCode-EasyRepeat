@@ -107,8 +107,14 @@ describe('today', () => {
         expect(again).toMatchObject({ recommended: first.recommended, changed: false, fill: true });
     });
 
+    test('a number stored today by an older version is recomputed', () => {
+        const r = DR.today({}, today, { date: key(0), recommended: 14, dayLog: {} }, null, deps);
+        expect(r).toMatchObject({ recommended: 3, changed: true });
+        expect(r.state.algo).toBe('load14');
+    });
+
     test('a fixed number wins; fill can be turned off', () => {
-        const r = DR.today({}, today, { date: key(0), recommended: 9, need: 9 }, { fixed: 4, fill: false }, deps);
+        const r = DR.today({}, today, { date: key(0), algo: 'load14', recommended: 9, need: 9 }, { fixed: 4, fill: false }, deps);
         expect(r).toMatchObject({ recommended: 4, fixed: true, fill: false, need: 9 });
     });
 });

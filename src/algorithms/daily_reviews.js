@@ -25,7 +25,7 @@
  * A "review" = a rated attempt on a problem first done on an earlier day
  * (one per problem per day).
  *
- * Storage: dailyReviews = { date, recommended, need, pace }
+ * Storage: dailyReviews = { date, algo, recommended, need, pace }
  *          dailyReviewSettings = { fixed: number | null, fill: boolean (default true) }
  */
 (function (root, factory) {
@@ -45,6 +45,9 @@
     const HORIZON = 14;
     const RUNS = 64;
     const SEED = 20261101;
+    // Marks a stored recommendation as made by this algorithm, so a number
+    // stored today by an older version is recomputed instead of reused.
+    const ALGO = 'load14';
     const PACE_DAYS = 14;
 
     function pad(n) {
@@ -229,8 +232,8 @@
         const fill = !(settings && settings.fill === false);
         let day = s;
         let changed = false;
-        if (!(s.date === todayKey && Number(s.recommended) > 0)) {
-            day = { date: todayKey, ...recommend(problems, now, options) };
+        if (!(s.date === todayKey && s.algo === ALGO && Number(s.recommended) > 0)) {
+            day = { date: todayKey, algo: ALGO, ...recommend(problems, now, options) };
             changed = true;
         }
         const fixed = Number(settings && settings.fixed);

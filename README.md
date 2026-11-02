@@ -16,7 +16,7 @@ It automatically tracks your submissions (both Accepted and Wrong Answer), sched
 
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-green?logo=google-chrome)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
-![Version](https://img.shields.io/badge/version-2.0.0-orange)
+![Version](https://img.shields.io/badge/version-2.1.0-orange)
 
 ## 🚀 Quick Setup
 
@@ -117,7 +117,7 @@ For Cloud LLM:
 
 - **Fixed FSRS.** The original code used the wrong FSRS v4.5 weights, so rating *Again* on a problem you used to know made the next interval longer (e.g. 7 → 11 → 16 days). Now *Again* shortens it, as FSRS intends.
 - **Hard or Again → review after 1, 3 and 7 days.** *Good/Easy* moves the problem a step on; *Hard/Again* during these steps goes back one step. After the 7-day step it returns to the normal FSRS schedule. Cards show the step (e.g. RELEARN 2/3) and short-term reviews come first in the list.
-- **A recommended number of reviews a day.** New problems are not limited. Reviews start from your recent pace (average reviews per active day over the last 14, or 5 with little history); each day it goes up 10% if you did ≥95% of what was recommended and due over the last week, down 10% under 70% (range 3–60; leave days are not counted). You can fix the number in Settings. Due problems beyond it stay listed under "show all due".
+- **A recommended number of reviews a day, from the load ahead.** New problems are not limited. The number = reviews expected over the next 14 days ÷ 14: problems already due or due within 14 days, plus the times they come back inside the window (1/3/7-day steps after Hard/Again), estimated with how often your own reviews came out good over the last 90 days. When fewer are due today, the list is filled with the problems due soonest (marked EARLY) to even out the days; this can be turned off, and the number can be fixed, in Settings. The popup also shows your recent average when it is well below what is needed.
 - **Open N due problems at once, editor reset automatically.** The popup opens the first N of today's reviews in background tabs; each one's code editor is reset when the page loads.
 - **Leave.** A leave day shifts every scheduled review back one day and keeps the streak. Weekly and monthly quotas (week = Sunday–Saturday); missed days can be back-dated within quota; the quota can be set once at any time, then only changed on the 1st of a month.
 
@@ -700,7 +700,7 @@ npm run build
 
 - **修好的 FSRS：** 原代码的 FSRS v4.5 参数位置用错了，本来会的题评「重来」反而让下次间隔变长（比如 7 → 11 → 16 天）。现在评「重来」会缩短间隔。
 - **答差就隔 1、3、7 天各复习一次：** 评「困难」或「重来」后，隔 1 天、3 天、7 天各复习一次；评「正常/简单」进入下一步，中途又评差退回一步；7 天那一步过了回到正常的 FSRS 排期。卡片上显示进度（如「加强 2/3」），这类题排在列表最前面。
-- **每天一个推荐复习量：** 新题不限量。复习量从你最近的节奏起步（最近 14 个复习日的平均，记录少时为 5 道）；最近一周推荐且到期的复习做完 95% 以上就 +10%，不到 70% 就 −10%（范围 3–60，请假的日子不算）。也可以在设置里固定。超出推荐量的到期题点「显示全部到期」可以看到。
+- **每天一个推荐复习量（按未来的负荷算）：** 新题不限量。推荐量 = 未来 14 天预计的复习次数 ÷ 14：统计已经到期和 14 天内到期的题，加上它们在这 14 天里还会回来的次数（评差后隔 1、3、7 天），用你最近 90 天自己答好的比例来估计。今天到期的不够时，用最快要到期的题补满（标「提前复习」），让每天的量更平均；在设置里可以关掉补满，也可以固定每天的数量。需要量明显高于你最近的平均时，弹窗会把两个数都显示出来。
 - **一次打开 N 道题并自动重置：** 弹窗在后台标签页打开今天前 N 道复习题，页面加载后自动重置代码编辑器。
 - **请假：** 请假当天所有待复习题目整体顺延一天，连续天数不中断。有每周、每月额度（一周按周日到周六）；漏掉的日子在额度内可以补请；额度首次可随时设一次，之后只能在每月 1 号修改。
 

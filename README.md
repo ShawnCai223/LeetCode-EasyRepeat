@@ -16,7 +16,7 @@ It automatically tracks your submissions (both Accepted and Wrong Answer), sched
 
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-green?logo=google-chrome)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
-![Version](https://img.shields.io/badge/version-1.2.0-orange)
+![Version](https://img.shields.io/badge/version-2.0.0-orange)
 
 ## 🚀 Quick Setup
 
@@ -113,6 +113,14 @@ For Cloud LLM:
 ---
 
 
+## 🗓️ Review Planning (ShawnCai223 fork)
+
+- **Fixed FSRS.** The original code used the wrong FSRS v4.5 weights, so rating *Again* on a problem you used to know made the next interval longer (e.g. 7 → 11 → 16 days). Now *Again* shortens it, as FSRS intends.
+- **Hard or Again → review after 1, 3 and 7 days.** *Good/Easy* moves the problem a step on; *Hard/Again* during these steps goes back one step. After the 7-day step it returns to the normal FSRS schedule. Cards show the step (e.g. RELEARN 2/3) and short-term reviews come first in the list.
+- **A recommended number of reviews a day.** New problems are not limited. Reviews start from your recent pace (average reviews per active day over the last 14, or 5 with little history); each day it goes up 10% if you did ≥95% of what was recommended and due over the last week, down 10% under 70% (range 3–60; leave days are not counted). You can fix the number in Settings. Due problems beyond it stay listed under "show all due".
+- **Open N due problems at once, editor reset automatically.** The popup opens the first N of today's reviews in background tabs; each one's code editor is reset when the page loads.
+- **Leave.** A leave day shifts every scheduled review back one day and keeps the streak. Weekly and monthly quotas (week = Sunday–Saturday); missed days can be back-dated within quota; the quota can be set once at any time, then only changed on the 1st of a month.
+
 ## ✨ Features
 
 ### 🧠 Spaced Repetition (FSRS v4.5 Algorithm)
@@ -170,31 +178,6 @@ For Cloud LLM:
 
 
 ---
-
-## 🗓️ Review Planning (ShawnCai223 fork)
-
-This fork turns the review queue into a daily plan you can keep up with. Details and the reasoning behind each rule: see the in-extension Settings page ("Reinforcement & daily plan").
-
-**Ratings mean:** Easy = wrote it and can explain it · Good = wrote it, can't explain it · Hard = wrote it with hints · Again = couldn't write it.
-
-| Situation | What happens |
-| --- | --- |
-| New problem rated Good/Easy | Reviewed again after 3, 8 and 20 days, then normal FSRS |
-| Rated Hard/Again (any time) | Short-term review after 1, 3, 7 days; a bad rating there steps back one step |
-| 3 bad ratings in a row ("stubborn") | Practised 2–3× a day, 4 hours apart, with a notification each time (up to 3 problems at once) |
-| 6 bad ratings in multi-practice | Paused as "needs a different approach": read the solutions, do easier problems of the same topic, then click "I get it now" |
-| Weak topic (15+ points below your own average) | Reviews come back about a third sooner and get priority |
-| Plain FSRS, next review 60+ days out, last two Good/Easy | Shown as mastered |
-
-**Three modes.** *Learning* splits each day 70% new problems / 30% review (getting started, working through a list); *grinding* splits it 50% / 50% (a company list, interview prep). The day's total follows your average over the last 14 active days (10 for new users), or a number you set; it only goes up automatically. New problems are your own picks on LeetCode — the popup shows the quota and progress (e.g. new 2/7 · review 1/3).
-
-*Free* mode sets no new-problem quota — do as many new problems as you like. It recommends a number of reviews each day instead: it starts from your recent review pace (5 for new users) and moves up 10% when you finished nearly everything recommended and possible over the last week (≥95%), down 10% when you finished under 70%.
-
-**When will everything be "can do"?** In every mode the popup estimates when all problems you had done up to yesterday will be ones you can do (last rating Good/Easy and not in short-term review, multi-practice or the queue), at today's review count — and how many reviews a day would get there in ~3 months. It uses your own last 90 days: how often the attempt after a bad rating comes out good, how many good reviews in a row each weak problem still needs, and the reviews already-known problems need to stay known (including the ~10% that will slip and need relearning).
-
-**Daily plan.** Reviews are taken by forgetting risk (load Easy 1 / Medium 2 / Hard 3) until the review share is used; one topic takes at most 40%. When more reviews are due than the share, the popup asks: add them to today, or roll them on. When fewer are due: pull in reviews due within a week, or do more new problems. Leave days and missed days are spread out instead of piling up. Multi-practice comes on top.
-
-**Also:** open the first N due problems at once with a fresh editor · leave days with weekly/monthly quota (changeable on the 1st) · merge-import history from a backup JSON · sprint mode before an interview · FSRS fix (an "Again" used to make the next interval longer).
 
 ## 🆕 Recent Updates
 
@@ -713,30 +696,13 @@ npm run build
 
 ---
 
-## 🗓️ 复习计划（ShawnCai223 fork 新增）
+## 🗓️ 复习规划（ShawnCai223 fork）
 
-这个 fork 把待复习列表变成每天做得完的计划。每条规则的细节和理由见扩展设置页的「加强复习与每日计划」。
-
-**评分含义：** 简单 = 会写会说 · 正常 = 会写不会说 · 困难 = 按照提示写了出来 · 重来 = 完全不会写。
-
-| 情况 | 系统怎么做 |
-| --- | --- |
-| 新题第一次评「正常/简单」 | 隔 3、8、20 天各复习一次，再交给 FSRS |
-| 任何时候评「困难/重来」 | 隔 1、3、7 天短期加强；加强期间再评差退回一步 |
-| 连续 3 次评差（顽固题） | 一天练 2–3 次，间隔 4 小时，每次弹通知（同时最多 3 道） |
-| 一天多练里累计评差 6 次 | 暂停并标为「需要换方法」：看题解、做同专题的简单题，再点「我看懂了」 |
-| 弱专题（比自己的平均答好率低 15 个百分点以上） | 复习间隔缩短约三分之一，排题优先 |
-| 正常排期、下次复习在 60 天以后、最近 2 次答好 | 显示为已掌握 |
-
-**三种模式：** 学习模式按 70% 新题 / 30% 复习拆分每天的题量（入门、按题单学新知识）；刷题模式按 50% / 50%（刷公司题单、准备面试）。每天的总题量取你最近 14 个做题日的平均（新用户 10 题），也可以填固定数字，自动值只升不降。新题由你自己在 LeetCode 上挑，弹窗显示配额和进度（如「新题 2/7 · 复习 1/3」）。
-
-**自由模式**不规定新题数量，想做多少做多少；系统改为每天推荐复习量：从你最近的复习节奏起步（新用户 5 道），最近一周把推荐且能做的复习基本做完（≥95%）就 +10%，完成不到 70% 就 −10%。
-
-**预计多久全部会做：** 每种模式下，弹窗都会按今天的复习量估算截至昨天做过的所有题什么时候全部「会做」（最近一次评「正常/简单」，且不在短期加强、一天多练或排队中），并给出想在 3 个月内完成每天需要复习几道。估算用你自己最近 90 天的数据：评差之后下一次答好的比例、每道薄弱题还需要连续答好几次，以及已会的题保持住需要的复习量（其中约 10% 会忘、需要重新加强）。
-
-**每日计划：** 复习题按遗忘风险挑选（负荷：简单 1 / 中等 2 / 困难 3），装满复习名额为止，单个专题最多占 40%。到期复习比名额多时，弹窗问你加进今天还是顺延；比名额少时，问你提前复习一周内到期的题还是多做新题。请假和漏签的积压会被摊开，一天多练另算。
-
-**其他：** 一次打开前 N 道到期题并自动重置代码 · 请假（每周/每月额度，每月 1 号可改） · 从备份 JSON 合并导入历史 · 面试前的冲刺模式 · FSRS 修复（原来评「重来」反而会让间隔变长）。
+- **修好的 FSRS：** 原代码的 FSRS v4.5 参数位置用错了，本来会的题评「重来」反而让下次间隔变长（比如 7 → 11 → 16 天）。现在评「重来」会缩短间隔。
+- **答差就隔 1、3、7 天各复习一次：** 评「困难」或「重来」后，隔 1 天、3 天、7 天各复习一次；评「正常/简单」进入下一步，中途又评差退回一步；7 天那一步过了回到正常的 FSRS 排期。卡片上显示进度（如「加强 2/3」），这类题排在列表最前面。
+- **每天一个推荐复习量：** 新题不限量。复习量从你最近的节奏起步（最近 14 个复习日的平均，记录少时为 5 道）；最近一周推荐且到期的复习做完 95% 以上就 +10%，不到 70% 就 −10%（范围 3–60，请假的日子不算）。也可以在设置里固定。超出推荐量的到期题点「显示全部到期」可以看到。
+- **一次打开 N 道题并自动重置：** 弹窗在后台标签页打开今天前 N 道复习题，页面加载后自动重置代码编辑器。
+- **请假：** 请假当天所有待复习题目整体顺延一天，连续天数不中断。有每周、每月额度（一周按周日到周六）；漏掉的日子在额度内可以补请；额度首次可随时设一次，之后只能在每月 1 号修改。
 
 ## ✨ 核心功能
 

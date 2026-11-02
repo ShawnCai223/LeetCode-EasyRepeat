@@ -25,9 +25,8 @@ let currentLeetCodeBase = 'https://leetcode.com';
 let currentLeave = { leaveDays: [], settings: null, isLeaveToday: false };
 let currentBatchSize = 3;
 let currentVisibleProblems = [];
-let currentLaterProblems = [];
-let currentRethinkProblems = [];
-let currentPlanSummary = null;
+let currentPlan = null;
+let showAllDue = false;
 
 const LEETCODE_HOSTS = new Set(['leetcode.com', 'leetcode.cn']);
 
@@ -186,453 +185,59 @@ async function openReviewTabs(problemList) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Daily plan (每日题量均衡 + 加强复习)                                   */
+/* Daily reviews (每天推荐复习量)                                        */
 /* ------------------------------------------------------------------ */
 
-function getReinforcement() {
-    return (typeof window !== 'undefined' && window.Reinforcement) || null;
-}
-
-function getLoadBalancer() {
-    return (typeof window !== 'undefined' && window.LoadBalancer) || null;
-}
-
-function getTopicMastery() {
-    return (typeof window !== 'undefined' && window.TopicMastery) || null;
-}
-
-/** Sprint (冲刺) settings → active window for today, or null. */
-function activeSprint(settings, todayKey) {
-    const sp = settings && settings.sprint;
-    if (!sp || !sp.until || !sp.start) return null;
-    if (todayKey < sp.start || todayKey > sp.until) return null;
-    return sp;
-}
-
-const REINFORCE_BOOTSTRAP_KEY = 'reinforcementBootstrappedV2';
-
 /**
- * Daily upkeep before planning:
- * - once: weak problems from before (last rating <= 2) go into the queue;
- * - once a day: freeze today's budget, admit queued problems that fit it,
- *   and fill the multi-practice pool from the most stubborn admitted problems.
- * Returns the (possibly updated) problem map.
+ * Today's recommended number of reviews, logged for tomorrow's adjustment,
+ * and the due list split into today's share and the rest.
  */
-async function runDailyMaintenance(problemMap, now) {
-    const R = getReinforcement();
-    const LB = getLoadBalancer();
-    if (!R || !LB) return problemMap;
-
-    const state = await chrome.storage.local.get({ [REINFORCE_BOOTSTRAP_KEY]: false, reviewPlan: null, reviewSettings: null });
-    const settings = state.reviewSettings || {};
-    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? { ...state.reviewPlan } : {};
-    const todayKey = LB.toKey(now);
-    let map = problemMap;
-    let changed = false;
-
-    if (!state[REINFORCE_BOOTSTRAP_KEY]) {
-        const next = {};
-        let count = 0;
-        for (const [slug, problem] of Object.entries(map)) {
-            const updated = R.bootstrapProblem(problem);
-            if (updated !== problem) count++;
-            next[slug] = updated;
-        }
-        map = next;
-        changed = count > 0;
-        console.log('[Popup] Reinforcement setup: queued', count, 'weak problems');
+async function computeDailyPlan(problemMap, dueProblems) {
+    const DR = window.DailyReviews;
+    if (!DR) return null;
+    const RL = window.Relearn;
+    const now = new Date();
+    const stored = await chrome.storage.local.get({ dailyReviews: null, dailyReviewSettings: null });
+    const day = DR.today(problemMap, now, stored.dailyReviews, stored.dailyReviewSettings, currentLeave.leaveDays);
+    const done = DR.reviewsOn(problemMap, DR.toKey(now));
+    let state = day.state;
+    let changed = day.changed;
+    if (!currentLeave.isLeaveToday) {
+        const logged = DR.logDay(state, now, day.recommended, done + dueProblems.length);
+        state = logged.state;
+        changed = changed || logged.changed;
     }
+    if (changed) await chrome.storage.local.set({ dailyReviews: state });
+    const parts = DR.split(dueProblems, day.recommended - done, RL ? RL.currentStep : undefined);
+    return { recommended: day.recommended, fixed: day.fixed, done, today: parts.today, later: parts.later };
+}
 
-    if (plan.budgetDate !== todayKey || !plan.budget) {
-        if (settings.mode === 'free') {
-            if (plan.recommendedDate !== todayKey) {
-                plan.recommended = LB.recommendReviews(map, now, plan.recommended, plan.dayLog);
-                plan.recommendedDate = todayKey;
-            }
-            plan.budget = LB.dailyBudget(map, now, settings, 0, { recommendedReviews: plan.recommended });
-        } else {
-            const fixed = Number(settings.dailyProblems) > 0;
-            plan.budget = LB.dailyBudget(map, now, settings, fixed ? 0 : plan.autoTotal);
-            if (!fixed) plan.autoTotal = plan.budget.total;
-        }
-        plan.budgetDate = todayKey;
-    }
-
-    if (plan.admittedDate !== todayKey) {
-        const { admit } = LB.chooseAdmissions(map, plan.budget.reviewCapacity);
-        if (admit.length) {
-            map = { ...map };
-            for (const slug of admit) map[slug] = R.admitQueued(map[slug], now);
-            changed = true;
-            console.log('[Popup] Admitted from queue:', admit);
-        }
-        plan.admittedDate = todayKey;
-    }
-
-    const TM = getTopicMastery();
-    if (TM) {
-        const mastery = TM.computeTopicMastery(map, now);
-        plan.weakTopics = mastery.weak;
-    }
-
-    const poolSize = R.normalizePoolSize(settings.intensivePoolSize);
-    const { pool, promoted } = R.selectIntensivePool(map, poolSize);
-    if (promoted.length) {
-        map = { ...map };
-        for (const slug of promoted) map[slug] = R.promoteToIntensive(map[slug], now);
-        changed = true;
-    }
-    plan.intensive = pool;
-
-    const planChanged = JSON.stringify(plan) !== JSON.stringify(state.reviewPlan || {});
-    if (!changed && !planChanged && state[REINFORCE_BOOTSTRAP_KEY]) return map;
-
-    // Re-read right before writing so a submission saved meanwhile is kept.
-    const fresh = await chrome.storage.local.get({ problems: {} });
-    const merged = { ...fresh.problems };
-    for (const [slug, problem] of Object.entries(map)) {
-        const latest = fresh.problems[slug];
-        const sameRecord = latest && (latest.history || []).length === (problem.history || []).length;
-        if (!latest || sameRecord) merged[slug] = problem;
-    }
-    await chrome.storage.local.set({
-        ...(changed ? { problems: merged } : {}),
-        reviewPlan: plan,
-        [REINFORCE_BOOTSTRAP_KEY]: true
+function setupPlanBar() {
+    const button = document.getElementById('btn-plan-toggle');
+    if (!button) return;
+    button.addEventListener('click', () => {
+        showAllDue = !showAllDue;
+        void updateDashboard();
     });
-    return changed ? merged : map;
 }
 
-/**
- * Today's queues from the load planner:
- *   now   = do these now (planned for today + same-day practices that are due)
- *   later = same-day practices due later today
- */
-async function buildTodayQueues(problemMap, now) {
-    const LB = getLoadBalancer();
-    const all = Object.values(problemMap);
-    const endOfToday = getCurrentDate();
-    if (!LB) {
-        const due = all.filter(p => new Date(p.nextReviewDate) <= endOfToday)
-            .sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
-        return { now: due, later: [], summary: null };
-    }
-
-    const stored = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null, leaveDays: [] });
-    const planState = stored.reviewPlan && typeof stored.reviewPlan === 'object' ? stored.reviewPlan : {};
-    const settings = stored.reviewSettings || {};
-    const todayKey = LB.toKey(now);
-    const wantedMode = ['grind', 'free'].includes(settings.mode) ? settings.mode : 'learn';
-    const freshBudget = () => wantedMode === 'free'
-        ? LB.dailyBudget(problemMap, now, settings, 0, { recommendedReviews: planState.recommended || LB.recommendReviews(problemMap, now, 0, planState.dayLog) })
-        : LB.dailyBudget(problemMap, now, settings, Number(settings.dailyProblems) > 0 ? 0 : planState.autoTotal);
-    let budget = planState.budgetDate === todayKey && planState.budget ? { ...planState.budget } : freshBudget();
-    // The mode or a fixed total may have changed since the budget was frozen today.
-    if (budget.mode !== wantedMode || (wantedMode !== 'free' && Number(settings.dailyProblems) > 0 && budget.total !== Number(settings.dailyProblems))) {
-        budget = freshBudget();
-    }
-    const sprint = activeSprint(settings, todayKey);
-    if (sprint) {
-        // Sprint = reviews only: the whole (larger) day goes to going through everything.
-        const total = Number(sprint.dailyProblems) > 0 ? Number(sprint.dailyProblems) : (budget.total || budget.reviewQuota) * 2;
-        budget = { ...budget, total, newQuota: 0, reviewQuota: total, reviewCapacity: Math.max(1, Math.round(total * budget.avgWeight)) };
-    }
-    const choice = planState.dayChoice && planState.dayChoice.date === todayKey ? planState.dayChoice : {};
-
-    const plan = LB.planReviews(problemMap, {
-        today: now,
-        leaveDays: stored.leaveDays,
-        capacity: budget.reviewCapacity,
-        weakTopics: planState.weakTopics || [],
-        sprint: sprint ? { start: sprint.start, end: sprint.until } : null,
-        includeAllDueToday: choice.overflow === 'include',
-        fillTodayFromSoon: choice.spare === 'pull'
-    });
-    const isIntensive = (p) => p.reinforce && p.reinforce.mode === 'intensive';
-    const nowList = [];
-    const later = [];
-    for (const slug of plan.today) {
-        const p = problemMap[slug];
-        if (!p) continue;
-        if (isIntensive(p) && new Date(p.nextReviewDate) > now) later.push(p);
-        else nowList.push(p);
-    }
-    // Same-day practices first, then the planner's priority order.
-    nowList.sort((a, b) => (isIntensive(b) ? 1 : 0) - (isIntensive(a) ? 1 : 0));
-    later.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
-
-    const done = LB.doneToday(problemMap, now);
-    const plannedReviews = nowList.filter(p => !isIntensive(p)).length;
-    // Review room left today (in problems), and whether the user gives it to new problems.
-    const spareSlots = plan.deferredCount > 0 ? 0 : Math.max(0, budget.reviewQuota - done.reviewCount - plannedReviews);
-    const newQuota = budget.newQuota === null ? null : budget.newQuota + (choice.spare === 'new' ? spareSlots : 0);
-
-    // Day log (free mode's recommendation floats on it): what was asked, possible, done.
-    const dayLog = { ...(planState.dayLog || {}) };
-    dayLog[todayKey] = {
-        rec: budget.reviewQuota,
-        available: done.reviewCount + plannedReviews + (choice.overflow ? 0 : plan.deferredCount),
-        done: done.reviewCount
-    };
-    const keep = Object.keys(dayLog).sort().slice(-30);
-    const trimmed = Object.fromEntries(keep.map(k => [k, dayLog[k]]));
-    if (JSON.stringify(trimmed) !== JSON.stringify(planState.dayLog || {})) {
-        const latest = (await chrome.storage.local.get({ reviewPlan: null })).reviewPlan || {};
-        await chrome.storage.local.set({ reviewPlan: { ...latest, dayLog: trimmed } });
-    }
-
-    const FC = (typeof window !== 'undefined' && window.Forecast) || null;
-    const forecast = FC && !sprint ? FC.estimateClearDays(problemMap, now, budget.reviewQuota) : null;
-
-    const R = getReinforcement();
-    const TM = getTopicMastery();
-    const mastery = TM ? TM.computeTopicMastery(problemMap, now) : null;
-    const rethink = all.filter(p => p.reinforce && p.reinforce.mode === 'rethink');
-    currentRethinkProblems = rethink;
-
-    return {
-        now: nowList,
-        later,
-        summary: {
-            forecast,
-            mode: budget.mode,
-            total: budget.total,
-            budgetSource: budget.source,
-            newDone: done.newCount,
-            newQuota,
-            reviewDone: done.reviewCount,
-            reviewQuota: budget.reviewQuota,
-            plannedReviews,
-            overflow: choice.overflow ? 0 : plan.deferredCount,
-            overflowChosen: choice.overflow || null,
-            spareSlots: choice.spare ? 0 : (plan.soonCount > 0 || spareSlots > 0 ? spareSlots : 0),
-            spareChosen: choice.spare || null,
-            soonCount: plan.soonCount,
-            mastered: R ? all.filter(p => R.isMastered(p)).length : 0,
-            weakTopics: mastery ? mastery.topics.filter(t => t.status === 'weak') : [],
-            overallRate: mastery ? mastery.overall : null,
-            sprint: sprint ? { until: sprint.until, daysLeft: Math.max(0, LB.dayIndex(new Date(`${sprint.until}T12:00:00`), now)), left: plan.sprintLeft } : null,
-            intensiveCount: all.filter(isIntensive).length,
-            queuedCount: all.filter(p => p.reinforce && p.reinforce.mode === 'queued').length,
-            isLeaveDay: plan.days[0].leave,
-            fixedBudget: Number(stored.reviewSettings && stored.reviewSettings.dailyProblems) > 0
-        }
-    };
-}
-
-function renderPlanStatus() {
-    const el = document.getElementById('plan-status');
-    const choiceEl = document.getElementById('plan-choice');
-    if (!el) return;
-    const s = currentPlanSummary;
-    if (!s || currentView !== 'dashboard') {
-        el.style.display = 'none';
-        if (choiceEl) choiceEl.style.display = 'none';
+function renderPlanBar() {
+    const bar = document.getElementById('plan-bar');
+    const status = document.getElementById('plan-status');
+    const button = document.getElementById('btn-plan-toggle');
+    if (!bar || !status || !button) return;
+    const p = currentPlan;
+    if (!p || currentView !== 'dashboard') {
+        bar.style.display = 'none';
         return;
     }
-    el.style.display = 'block';
-    const lines = [];
-    if (s.sprint) {
-        const sprintLine = t('popup_sprint', { until: s.sprint.until.slice(5).replace('-', '/'), days: s.sprint.daysLeft, left: s.sprint.left });
-        const perDay = Math.ceil(s.sprint.left / Math.max(1, s.sprint.daysLeft));
-        lines.push(perDay > s.total ? `${sprintLine} · ${t('popup_sprint_short', { need: perDay })}` : sprintLine);
-        lines.push(t('popup_sprint_today', { done: s.reviewDone, quota: s.reviewQuota }));
-    } else if (s.mode === 'free') {
-        lines.push(t('popup_mode_free_line', { reviewDone: s.reviewDone, reviewQuota: s.reviewQuota, newDone: s.newDone }));
-    } else {
-        lines.push(t('popup_mode_line', {
-            mode: t(s.mode === 'grind' ? 'popup_mode_grind' : 'popup_mode_learn'),
-            total: s.total,
-            newDone: s.newDone,
-            newQuota: s.newQuota,
-            reviewDone: s.reviewDone,
-            reviewQuota: s.reviewQuota
-        }));
-    }
-    const extras = [];
-    if (s.intensiveCount > 0) extras.push(t('popup_plan_intensive', { count: s.intensiveCount }));
-    if (s.queuedCount > 0) extras.push(t('popup_plan_queued', { count: s.queuedCount }));
-    if (s.mastered > 0) extras.push(t('popup_plan_mastered', { count: s.mastered }));
-    if (extras.length) lines.push(extras.join(' · '));
-    if (s.forecast && s.forecast.target > 0) {
-        const f = s.forecast;
-        if (!f.todo) lines.push(t('popup_forecast_all', { target: f.target }));
-        else if (!f.enough) lines.push(t('popup_forecast_never', { target: f.target, todo: f.todo, per: s.reviewQuota, need: f.reviewsFor90 }));
-        else {
-            const thisYear = f.date.slice(0, 4) === String(new Date().getFullYear());
-            const date = thisYear ? f.date.slice(5).replace('-', '/') : f.date.replace(/-/g, '/');
-            const span = f.days < 60 ? t('popup_span_days', { n: f.days })
-                : f.days < 730 ? t('popup_span_months', { n: Math.round(f.days / 30) })
-                    : t('popup_span_years', { n: Math.round(f.days / 365) });
-            lines.push(t('popup_forecast', { target: f.target, todo: f.todo, per: s.reviewQuota, date, span, need: f.reviewsFor90 }));
-        }
-    }
-    if (s.weakTopics.length) {
-        const shown = s.weakTopics.slice(0, 3).map(w => `${translateTopicName(w.topic)} ${w.rate}%`).join(' · ');
-        lines.push(t('popup_weak_topics', { topics: shown, overall: s.overallRate }));
-    }
-    el.innerText = lines.join('\n');
-    el.title = t('popup_plan_help');
-    renderPlanChoice(choiceEl, s);
-}
-
-/** Over or under the review share today: let the user decide (once a day). */
-function renderPlanChoice(el, s) {
-    if (!el) return;
-    el.innerHTML = '';
-    let text = null;
-    let options = [];
-    if (s.overflow > 0) {
-        text = t('popup_overflow', { count: s.overflow });
-        options = [
-            [t('popup_overflow_include'), { overflow: 'include' }],
-            [t('popup_overflow_defer'), { overflow: 'defer' }]
-        ];
-    } else if (s.spareSlots > 0 && !s.sprint && (s.mode !== 'free' || s.soonCount > 0)) {
-        text = t('popup_spare', { count: s.spareSlots });
-        const other = s.mode === 'free' ? [t('popup_spare_none'), { spare: 'none' }] : [t('popup_spare_new'), { spare: 'new' }];
-        options = s.soonCount > 0 ? [[t('popup_spare_pull'), { spare: 'pull' }], other] : [other];
-    }
-    if (!text) {
-        el.style.display = 'none';
-        return;
-    }
-    el.style.display = 'flex';
-    const label = document.createElement('span');
-    label.className = 'leave-status';
-    label.textContent = text;
-    el.appendChild(label);
-    for (const [name, value] of options) {
-        const b = document.createElement('button');
-        b.type = 'button';
-        b.className = 'leave-btn';
-        b.textContent = name;
-        b.addEventListener('click', () => { void saveDayChoice(value); });
-        el.appendChild(b);
-    }
-}
-
-async function saveDayChoice(value) {
-    const LB = getLoadBalancer();
-    if (!LB) return;
-    const todayKey = LB.toKey(new Date());
-    const state = await chrome.storage.local.get({ reviewPlan: null });
-    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? { ...state.reviewPlan } : {};
-    const prev = plan.dayChoice && plan.dayChoice.date === todayKey ? plan.dayChoice : { date: todayKey };
-    plan.dayChoice = { ...prev, ...value, date: todayKey };
-    await chrome.storage.local.set({ reviewPlan: plan });
-    await updateDashboard();
-}
-
-function translateTopicName(topic) {
-    const i18n = getI18n();
-    return (i18n && typeof i18n.translateTopic === 'function') ? i18n.translateTopic(topic, currentLanguage) : topic;
-}
-
-/**
- * Problems paused for "rethink" (换方法): read the solution, practise easier
- * problems of the same topic, then mark as understood.
- */
-function renderRethink(isDashboard) {
-    const section = document.getElementById('rethink-section');
-    const list = document.getElementById('rethink-list');
-    const title = document.getElementById('rethink-title');
-    if (!section || !list) return;
-    if (!isDashboard || !currentRethinkProblems.length) {
-        section.style.display = 'none';
-        return;
-    }
-    section.style.display = 'block';
-    if (title) title.innerText = t('popup_rethink_title', { count: currentRethinkProblems.length });
-    list.innerHTML = '';
-    const TM = getTopicMastery();
-    const R = getReinforcement();
-    const base = currentLeetCodeBase.replace(/\/$/, '');
-    const all = currentAllProblems;
-    for (const p of currentRethinkProblems) {
-        const row = document.createElement('div');
-        row.className = 'rethink-row';
-        const name = document.createElement('div');
-        name.className = 'rethink-name';
-        name.textContent = (currentTitleCache[p.slug] && currentLanguage === 'zh' && currentTitleCache[p.slug].zh) || p.title || p.slug;
-        const hint = document.createElement('div');
-        hint.className = 'rethink-hint';
-        hint.textContent = t('popup_rethink_hint', { count: (p.reinforce && p.reinforce.badCount) || 6 });
-        const actions = document.createElement('div');
-        actions.className = 'rethink-actions';
-        const button = (label, onClick) => {
-            const b = document.createElement('button');
-            b.className = 'batch-btn';
-            b.type = 'button';
-            b.textContent = label;
-            b.addEventListener('click', onClick);
-            actions.appendChild(b);
-        };
-        button(t('popup_rethink_solution'), () => chrome.tabs.create({ url: `${base}/problems/${p.slug}/solutions/` }));
-        const LB = getLoadBalancer();
-        const topic = LB ? LB.mainTopic(p, LB.broadTags(Object.fromEntries(all.map(q => [q.slug, q])))) : (p.topics || [])[0];
-        if (topic) {
-            // Easier problems of the same topic: ones you already know first, else LeetCode's list.
-            const order = { easy: 1, medium: 2, hard: 3 };
-            const mine = all.filter(q => q.slug !== p.slug && Array.isArray(q.topics) && q.topics.includes(topic)
-                && (order[String(q.difficulty).toLowerCase()] || 2) <= (order[String(p.difficulty).toLowerCase()] || 2)
-                && (!q.reinforce || q.reinforce.mode === 'consolidate') && R && R.lastRating(q.history) >= 3)
-                .slice(0, 2);
-            button(t('popup_rethink_similar', { topic: translateTopicName(topic) }), () => {
-                if (mine.length) void openReviewTabs(mine);
-                else chrome.tabs.create({ url: TM ? TM.topicUrl(base, topic) : `${base}/problemset/` });
-            });
-        }
-        button(t('popup_rethink_done'), () => { void resumeRethink(p.slug); });
-        row.appendChild(name);
-        row.appendChild(hint);
-        row.appendChild(actions);
-        list.appendChild(row);
-    }
-}
-
-async function resumeRethink(slug) {
-    const R = getReinforcement();
-    if (!R) return;
-    const state = await chrome.storage.local.get({ problems: {}, reviewPlan: null, reviewSettings: null });
-    const p = state.problems[slug];
-    if (!p || !R.needsRethink(p)) return;
-    const plan = state.reviewPlan && typeof state.reviewPlan === 'object' ? { ...state.reviewPlan } : {};
-    const pool = Array.isArray(plan.intensive) ? plan.intensive.filter(s => s !== slug) : [];
-    const size = R.normalizePoolSize(state.reviewSettings && state.reviewSettings.intensivePoolSize);
-    const room = pool.length < size;
-    const next = R.resumeFromRethink(p, new Date(), room);
-    if (room) pool.push(slug);
-    plan.intensive = pool;
-    await chrome.storage.local.set({ problems: { ...state.problems, [slug]: next }, reviewPlan: plan });
-}
-
-function formatTime(iso) {
-    const d = new Date(iso);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
-}
-
-function renderLaterToday(isDashboard) {
-    const section = document.getElementById('later-section');
-    const title = document.getElementById('later-title');
-    if (!section) return;
-    if (!isDashboard || !currentLaterProblems.length) {
-        section.style.display = 'none';
-        return;
-    }
-    section.style.display = 'block';
-    if (title) {
-        title.innerText = t('popup_later_today', {
-            count: currentLaterProblems.length,
-            time: formatTime(currentLaterProblems[0].nextReviewDate)
-        });
-    }
-    renderVectors(currentLaterProblems, 'vector-list-later', false, {
-        language: currentLanguage,
-        titleCache: currentTitleCache,
-        problemUrlBase: currentLeetCodeBase,
-        onGo: (problem) => { void openReviewTabs([problem]); }
-    });
+    bar.style.display = 'flex';
+    const left = Math.max(0, p.recommended - p.done);
+    let text = t(p.fixed ? 'popup_plan_line_fixed' : 'popup_plan_line', { rec: p.recommended, done: p.done, left });
+    if (p.later.length) text += ` · ${t('popup_plan_more', { count: p.later.length })}`;
+    status.innerText = text;
+    button.style.display = p.later.length ? '' : 'none';
+    button.innerText = showAllDue ? t('popup_plan_show_today') : t('popup_plan_show_all');
 }
 
 /* ------------------------------------------------------------------ */
@@ -789,6 +394,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         await setupFilters();
         await setupBatchBar();
         setupLeaveBar();
+        setupPlanBar();
         console.log('[Popup][DIAG] Step 6: updateDashboard...');
         await updateDashboard();
         console.log('[Popup][DIAG] Step 7: setupStorageListeners...');
@@ -806,7 +412,7 @@ function setupStorageListeners() {
 
     chrome.storage.onChanged.addListener((changes, namespace) => {
         if (namespace !== 'local') return;
-        if (changes.problems || changes.localizedProblemTitles || changes.leaveDays || changes.leaveSettings || changes.reviewSettings) {
+        if (changes.problems || changes.localizedProblemTitles || changes.leaveDays || changes.leaveSettings) {
             void updateDashboard();
         }
     });
@@ -940,21 +546,19 @@ async function updateDashboard() {
     console.log('[Popup][DIAG] updateDashboard: START');
     const result = await chrome.storage.local.get({ problems: {}, localizedProblemTitles: {} });
     const now = getCurrentDate();
-    const leaveApplied = await applyArrivedLeaveDays(result.problems, now);
-    const problemMap = await runDailyMaintenance(leaveApplied, new Date());
+    const problemMap = await applyArrivedLeaveDays(result.problems, now);
     const problems = Object.values(problemMap);
 
     console.log('[Popup][DIAG] updateDashboard: total problems =', problems.length, ', now =', now.toISOString());
 
-    const queues = await buildTodayQueues(problemMap, new Date());
-    const dueProblems = queues.now;
+    const dueProblems = problems.filter(problem => new Date(problem.nextReviewDate) <= now);
+    dueProblems.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
     problems.sort((a, b) => new Date(a.nextReviewDate) - new Date(b.nextReviewDate));
 
-    console.log('[Popup][DIAG] updateDashboard: due =', dueProblems.length, ', later =', queues.later.length, ', all =', problems.length);
+    console.log('[Popup][DIAG] updateDashboard: due =', dueProblems.length, ', all =', problems.length);
 
-    currentDueProblems = dueProblems;
-    currentLaterProblems = queues.later;
-    currentPlanSummary = queues.summary;
+    currentPlan = await computeDailyPlan(problemMap, dueProblems);
+    currentDueProblems = currentPlan && !showAllDue ? currentPlan.today : (currentPlan ? [...currentPlan.today, ...currentPlan.later] : dueProblems);
     currentAllProblems = problems;
     currentTitleCache = result.localizedProblemTitles || {};
 
@@ -1026,11 +630,9 @@ function rerenderCurrentView() {
         onGo: isDashboard ? (problem) => { void openReviewTabs([problem]); } : undefined
     });
     updateQueueTitle();
+    renderPlanBar();
     renderBatchBar();
     renderLeaveBar();
-    renderPlanStatus();
-    renderLaterToday(isDashboard);
-    renderRethink(isDashboard);
     syncSidebarState();
 }
 
@@ -1345,40 +947,22 @@ async function updateProblemSRS(slug, ease) {
         nextStep = calculateNextReview(problem.interval, problem.repetition, ease, now);
     }
 
-    const R = getReinforcement();
-    let reinforceDecision = null;
-    if (R) {
-        try {
-            const ctx = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null });
-            reinforceDecision = R.scheduleAfterReview({
-                problem,
-                rating,
-                now: new Date(),
-                fsrsNextReviewDate: nextStep.nextReviewDate,
-                intensiveSlugs: (ctx.reviewPlan && ctx.reviewPlan.intensive) || [],
-                poolSize: ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined,
-                weakTopic: Boolean(ctx.reviewPlan && Array.isArray(ctx.reviewPlan.weakTopics) && Array.isArray(problem.topics) && problem.topics.some(t => ctx.reviewPlan.weakTopics.includes(t)))
-            });
-        } catch (e) {
-            console.warn('[Popup] Reinforcement scheduling skipped:', e);
-        }
-    }
+    // Hard/Again: short-term review after 1, 3, 7 days (see relearn.js).
+    const relearnFields = window.Relearn ? window.Relearn.fields(problem, rating, now, nextStep.nextReviewDate) : {};
+    if (relearnFields.nextReviewDate) nextStep.nextReviewDate = relearnFields.nextReviewDate;
 
     problems[slug] = {
         ...problem,
-        ...(reinforceDecision ? { reinforce: reinforceDecision.reinforce } : {}),
+        ...relearnFields,
         interval: nextStep.nextInterval,
         repetition: nextStep.nextRepetition,
         easeFactor: nextStep.nextEaseFactor,
-        nextReviewDate: reinforceDecision ? reinforceDecision.nextReviewDate : nextStep.nextReviewDate,
+        nextReviewDate: nextStep.nextReviewDate,
         fsrs_stability: nextStep.fsrs_stability,
         fsrs_difficulty: nextStep.fsrs_difficulty,
         fsrs_state: nextStep.fsrs_state,
         fsrs_last_review: nextStep.fsrs_last_review,
-        history: [...problem.history, {
-            date: nowISO, status: 'Reviewed', rating,
-            ...(problem.reinforce && problem.reinforce.mode === 'intensive' ? { extra: true } : {})
-        }]
+        history: [...problem.history, { date: nowISO, status: 'Reviewed', rating }]
     };
 
     await chrome.storage.local.set({ problems });

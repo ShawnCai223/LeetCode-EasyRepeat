@@ -90,8 +90,11 @@
                     <span id="queue-title">PROBLEMS DUE TODAY</span>
                 </div>
 
-                <div class="plan-status" id="plan-status"></div>
-                <div class="leave-bar plan-choice" id="plan-choice" style="display:none;"></div>
+                <!-- DAILY REVIEWS (每天推荐复习量) -->
+                <div class="leave-bar plan-bar" id="plan-bar">
+                    <span id="plan-status" class="leave-status"></span>
+                    <button id="btn-plan-toggle" class="leave-btn" type="button"></button>
+                </div>
 
                 <!-- LEAVE BAR (请假) -->
                 <div class="leave-bar" id="leave-bar">
@@ -128,18 +131,6 @@
 
                 <div class="vector-list" id="vector-list">
                     <!-- Cards will be injected here via popup.js -->
-                </div>
-
-                <!-- RETHINK (换方法：一直练不会的题) -->
-                <div class="later-section rethink-section" id="rethink-section" style="display:none;">
-                    <div class="heatmap-header later-title" id="rethink-title">NEEDS A DIFFERENT APPROACH</div>
-                    <div id="rethink-list"></div>
-                </div>
-
-                <!-- LATER TODAY (一天多练：稍后的练习) -->
-                <div class="later-section" id="later-section" style="display:none;">
-                    <div class="heatmap-header later-title" id="later-title">LATER TODAY</div>
-                    <div class="vector-list" id="vector-list-later"></div>
                 </div>
             </section>
 

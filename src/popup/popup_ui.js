@@ -65,24 +65,6 @@ function formatTagLabel(label, language = 'en') {
  * @param {boolean} isInteractive - True for "Due" list (shows buttons), False for "All"
  * @param {object} options - Rendering options
  */
-/**
- * Retention shown on a card: FSRS's estimated chance of recalling it today when
- * the FSRS state is known, else the legacy ease-factor score, else a dash.
- */
-function formatRetention(problem) {
-    const f = typeof fsrs !== 'undefined' ? fsrs : (typeof window !== 'undefined' ? window.fsrs : null);
-    const s = Number(problem.fsrs_stability);
-    const last = new Date(problem.fsrs_last_review || problem.lastSolved || NaN).getTime();
-    if (f && typeof f.forgettingCurve === 'function' && s > 0 && Number.isFinite(last)) {
-        const elapsed = Math.max(0, (Date.now() - last) / 86400000);
-        const r = f.forgettingCurve(elapsed, s);
-        if (Number.isFinite(r)) return `${Math.round(Math.max(0, Math.min(1, r)) * 100)}%`;
-    }
-    const ease = Number(problem.easeFactor);
-    if (Number.isFinite(ease) && ease > 0) return `${Math.min(100, Math.round(ease * 40))}%`;
-    return '—';
-}
-
 export function renderVectors(problemList, containerId, isInteractive, options = {}) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -100,7 +82,12 @@ export function renderVectors(problemList, containerId, isInteractive, options =
 
     problemList.forEach(problem => {
         const uniqueId = problem.slug;
-        const interval = problem.interval;
+        const RL = typeof window !== 'undefined' ? window.Relearn : null;
+        const relearnStep = RL ? RL.currentStep(problem) : null;
+        const interval = relearnStep !== null ? RL.STEPS[relearnStep] : problem.interval;
+        const relearnTag = relearnStep !== null
+            ? `<span class="stat-tag relearn-tag">${t('popup_tag_relearn', { step: relearnStep + 1 }, language)}</span>`
+            : '';
         const nextReview = formatDate(problem.nextReviewDate, language);
         const displayTitle = formatCardTitle(problem, language, titleCache);
         const diffStyle = `difficulty-${(problem.difficulty || 'medium').toLowerCase()}`;
@@ -115,7 +102,7 @@ export function renderVectors(problemList, containerId, isInteractive, options =
         card.innerHTML = `
             <div class="vector-meta">
                 <span>#${problem.slug}</span>
-                <span>${t('popup_retention', {}, language)}: ${formatRetention(problem)}</span>
+                <span>${t('popup_retention', {}, language)}: ${Math.min(100, Math.round(problem.easeFactor * 40))}%</span>
             </div>
             <div class="vector-title">${displayTitle}</div>
             ${(problem.topics && problem.topics.length > 0) ? `
@@ -129,11 +116,7 @@ export function renderVectors(problemList, containerId, isInteractive, options =
             ` : ''}
             <div class="vector-stats" style="flex-wrap: wrap;">
                 <span class="stat-tag ${diffStyle}">${difficultyText}</span>
-                ${problem.reinforce && problem.reinforce.mode === 'intensive' ? `<span class="stat-tag reinforce-tag reinforce-intensive">${t('popup_tag_intensive', {}, language)}</span>` : ''}
-                ${problem.reinforce && problem.reinforce.mode === 'relearn' ? `<span class="stat-tag reinforce-tag">${t('popup_tag_relearn', {}, language)}</span>` : ''}
-                ${problem.reinforce && problem.reinforce.mode === 'queued' ? `<span class="stat-tag reinforce-tag">${t('popup_tag_queued', {}, language)}</span>` : ''}
-                ${problem.reinforce && problem.reinforce.mode === 'rethink' ? `<span class="stat-tag reinforce-tag reinforce-intensive">${t('popup_tag_rethink', {}, language)}</span>` : ''}
-                ${typeof window !== 'undefined' && window.Reinforcement && window.Reinforcement.isMastered(problem) ? `<span class="stat-tag mastered-tag">${t('popup_tag_mastered', {}, language)}</span>` : ''}
+                ${relearnTag}
                 <span class="stat-tag">${t('popup_interval_days', { days: interval }, language)}</span>
                 <span class="stat-tag">${t('popup_due_date', { date: nextReview }, language)}</span>
                 <div class="${actionGroupClass}">

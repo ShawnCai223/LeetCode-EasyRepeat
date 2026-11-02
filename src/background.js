@@ -309,46 +309,14 @@ async function autoSaveSessionAsAgain(session) {
     const currentDifficulty = current.fsrs_difficulty || 7.19605;
     const newDifficulty = Math.min(10, Math.max(1, currentDifficulty + 0.5345 * 2));
 
-    // Reinforcement (加强复习): an abandoned attempt counts as rating 1.
-    let nextReviewDate = nextDate.toISOString();
-    let reinforce = current.reinforce || null;
-    let reviewPlanUpdate = null;
-    const R = typeof self !== 'undefined' ? self.Reinforcement : null;
-    if (R) {
-        try {
-            const ctx = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null });
-            const plan = ctx.reviewPlan && typeof ctx.reviewPlan === 'object' ? ctx.reviewPlan : {};
-            const pool = Array.isArray(plan.intensive) ? plan.intensive : [];
-            const decision = R.scheduleAfterReview({
-                problem: { ...current, slug: key },
-                rating: 1,
-                now,
-                fsrsNextReviewDate: nextReviewDate,
-                intensiveSlugs: pool,
-                poolSize: ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined,
-                weakTopic: Array.isArray(plan.weakTopics) && Array.isArray(current.topics) && current.topics.some(t => plan.weakTopics.includes(t))
-            });
-            nextReviewDate = decision.nextReviewDate;
-            reinforce = decision.reinforce;
-            if (decision.joinedIntensive || decision.leftIntensive) {
-                const nextPool = pool.filter(slug => slug !== key);
-                if (decision.joinedIntensive) nextPool.push(key);
-                reviewPlanUpdate = { ...plan, intensive: nextPool };
-            }
-        } catch (e) {
-            console.warn('[Background] Reinforcement scheduling skipped:', e);
-        }
-    }
-
     problems[key] = {
         ...current,
-        reinforce,
         difficulty: session.difficulty || current.difficulty,
         lastSolved: nowISO,
         interval: nextInterval,
         repetition: (current.repetition || 0) + 1,
         easeFactor: current.easeFactor || 2.5,
-        nextReviewDate,
+        nextReviewDate: nextDate.toISOString(),
         fsrs_stability: W0,
         fsrs_difficulty: newDifficulty,
         fsrs_state: current.fsrs_state === 'Review' ? 'Relearning' : 'Review',
@@ -356,12 +324,11 @@ async function autoSaveSessionAsAgain(session) {
         topics: (session.topics && session.topics.length > 0) ? session.topics : (current.topics || []),
         history: [...(current.history || []), {
             date: nowISO, status: 'Wrong Answer',
-            rating: 1,
-            ...(current.reinforce && current.reinforce.mode === 'intensive' ? { extra: true } : {})
+            rating: 1
         }]
     };
 
-    await chrome.storage.local.set(reviewPlanUpdate ? { problems, reviewPlan: reviewPlanUpdate } : { problems });
+    await chrome.storage.local.set({ problems });
     console.log(`[Background] Auto-saved session for ${session.slug} as Again (rating=1)`);
 }
 

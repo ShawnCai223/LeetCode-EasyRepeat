@@ -23,14 +23,6 @@
     }
 }(typeof self !== 'undefined' ? self : this, function () {
 
-    function getReinforcement() {
-        if (typeof Reinforcement !== 'undefined' && Reinforcement) return Reinforcement;
-        if (typeof self !== 'undefined' && self.Reinforcement) return self.Reinforcement;
-        if (typeof window !== 'undefined' && window.Reinforcement) return window.Reinforcement;
-        if (typeof global !== 'undefined' && global.Reinforcement) return global.Reinforcement;
-        return null;
-    }
-
     /**
      * Save a submission record to Chrome Storage.
      * 
@@ -81,13 +73,6 @@
             if (isSameLocalDay(lastSolvedDate, now)) {
                 isDuplicateDay = true;
             }
-        }
-
-        // Intensive (一天多练) problems may be reviewed again the same day once due.
-        const R = getReinforcement();
-        if (isDuplicateDay && R && R.allowsSameDayReview(problems[problemKey], now)) {
-            console.log("[LeetCode EasyRepeat] Same-day practice for an intensive problem — recording it.");
-            isDuplicateDay = false;
         }
 
         if (isDuplicateDay) {
@@ -173,8 +158,14 @@
             nextStep = calcFn(currentProblem.interval, currentProblem.repetition, currentProblem.easeFactor);
         }
 
+        // Hard/Again: short-term review after 1, 3, 7 days (see relearn.js).
+        const RL = typeof Relearn !== 'undefined' ? Relearn : (typeof global !== 'undefined' ? global.Relearn : undefined);
+        const relearnFields = rating && RL ? RL.fields(currentProblem, rating, now, nextStep.nextReviewDate) : {};
+        if (relearnFields.nextReviewDate) nextStep.nextReviewDate = relearnFields.nextReviewDate;
+
         problems[problemKey] = {
             ...currentProblem,
+            ...relearnFields,
             difficulty: difficulty,
             lastSolved: nowISO,
             interval: nextStep.nextInterval,
@@ -186,58 +177,19 @@
             fsrs_state: nextStep.fsrs_state !== undefined ? nextStep.fsrs_state : currentProblem.fsrs_state,
             fsrs_last_review: nextStep.fsrs_last_review !== undefined ? nextStep.fsrs_last_review : currentProblem.fsrs_last_review,
             topics: (topics && topics.length > 0) ? topics : (currentProblem.topics || []),
-            history: [...currentProblem.history, {
-                date: nowISO,
-                status: difficultySource === 'api_poll_fail' ? 'Wrong Answer' : 'Accepted',
-                rating: rating,
-                // Multi-practice (一天多练) reviews are outside the daily budget.
-                ...(currentProblem.reinforce && currentProblem.reinforce.mode === 'intensive' ? { extra: true } : {})
-            }]
+            history: [...currentProblem.history, { date: nowISO, status: difficultySource === 'api_poll_fail' ? 'Wrong Answer' : 'Accepted', rating: rating }]
         };
 
-        // Reinforcement (加强复习) may bring the next review earlier than FSRS.
-        let reviewPlanUpdate = null;
-        if (rating && R) {
-            try {
-                const ctx = await chrome.storage.local.get({ reviewPlan: null, reviewSettings: null });
-                const plan = ctx && ctx.reviewPlan && typeof ctx.reviewPlan === 'object' ? ctx.reviewPlan : {};
-                const pool = Array.isArray(plan.intensive) ? plan.intensive : [];
-                const decision = R.scheduleAfterReview({
-                    problem: { ...currentProblem, slug: problemSlug },
-                    rating,
-                    now,
-                    fsrsNextReviewDate: nextStep.nextReviewDate,
-                    intensiveSlugs: pool,
-                    poolSize: ctx && ctx.reviewSettings ? ctx.reviewSettings.intensivePoolSize : undefined,
-                    weakTopic: Array.isArray(plan.weakTopics) && Array.isArray(currentProblem.topics) && currentProblem.topics.some(t => plan.weakTopics.includes(t))
-                });
-                problems[problemKey].nextReviewDate = decision.nextReviewDate;
-                problems[problemKey].reinforce = decision.reinforce;
-                if (decision.joinedIntensive || decision.leftIntensive) {
-                    const nextPool = pool.filter(slug => slug !== problemSlug);
-                    if (decision.joinedIntensive) nextPool.push(problemSlug);
-                    reviewPlanUpdate = { ...plan, intensive: nextPool };
-                }
-            } catch (e) {
-                console.warn('[LeetCode EasyRepeat] Reinforcement scheduling skipped:', e);
-            }
-        }
-
-        if (reviewPlanUpdate) {
-            await chrome.storage.local.set({ problems, reviewPlan: reviewPlanUpdate });
-        } else {
-            await chrome.storage.local.set({ problems });
-        }
+        await chrome.storage.local.set({ problems });
         // Log activity for streak (independent of problem existence)
         await logActivity(nowISO);
 
         console.log(`[LeetCode EasyRepeat] ✅ Saved to Chrome Storage!`);
 
-        const savedNextReview = problems[problemKey].nextReviewDate;
         if (typeof showCompletionToast === 'function') {
-            showCompletionToast(problemTitle, savedNextReview, { slug: problemSlug });
+            showCompletionToast(problemTitle, nextStep.nextReviewDate, { slug: problemSlug });
         } else if (typeof global !== 'undefined' && global.showCompletionToast) {
-            global.showCompletionToast(problemTitle, savedNextReview, { slug: problemSlug });
+            global.showCompletionToast(problemTitle, nextStep.nextReviewDate, { slug: problemSlug });
         }
 
         return { success: true };

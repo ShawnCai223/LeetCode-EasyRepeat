@@ -1,7 +1,7 @@
 {
     "manifest_version": 3,
     "name": "LeetCode EasyRepeat",
-    "version": "1.0.6",
+    "version": "2.0.0",
     "description": "Automatically capture LeetCode submissions and schedule spaced repetition reviews.",
     "icons": {
         "16": "src/assets/icons/icon16.png",
@@ -52,6 +52,7 @@
                 "src/shared/ui_i18n.js",
                 "src/shared/problem_titles.js",
                 "src/algorithms/fsrs_logic.js",
+                "src/algorithms/relearn.js",
                 "src/content/content_ui.js",
                 "src/shared/storage.js",
                 "src/content/leetcode_api.js",

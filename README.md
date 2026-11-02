@@ -186,7 +186,11 @@ This fork turns the review queue into a daily plan you can keep up with. Details
 | Weak topic (15+ points below your own average) | Reviews come back about a third sooner and get priority |
 | Plain FSRS, next review 60+ days out, last two Good/Easy | Shown as mastered |
 
-**Two modes.** *Learning* splits each day 70% new problems / 30% review (getting started, working through a list); *grinding* splits it 50% / 50% (a company list, interview prep). The day's total follows your average over the last 14 active days (10 for new users), or a number you set; it only goes up automatically. New problems are your own picks on LeetCode — the popup shows the quota and progress (e.g. new 2/7 · review 1/3).
+**Three modes.** *Learning* splits each day 70% new problems / 30% review (getting started, working through a list); *grinding* splits it 50% / 50% (a company list, interview prep). The day's total follows your average over the last 14 active days (10 for new users), or a number you set; it only goes up automatically. New problems are your own picks on LeetCode — the popup shows the quota and progress (e.g. new 2/7 · review 1/3).
+
+*Free* mode sets no new-problem quota — do as many new problems as you like. It recommends a number of reviews each day instead: it starts from your recent review pace (5 for new users) and moves up 10% when you finished nearly everything recommended and possible over the last week (≥95%), down 10% when you finished under 70%.
+
+**When will everything be "can do"?** In every mode the popup estimates when all problems you had done up to yesterday will be ones you can do (last rating Good/Easy and not in short-term review, multi-practice or the queue), at today's review count — and how many reviews a day would get there in ~3 months. It uses your own last 90 days: how often the attempt after a bad rating comes out good, how many good reviews in a row each weak problem still needs, and the reviews already-known problems need to stay known (including the ~10% that will slip and need relearning).
 
 **Daily plan.** Reviews are taken by forgetting risk (load Easy 1 / Medium 2 / Hard 3) until the review share is used; one topic takes at most 40%. When more reviews are due than the share, the popup asks: add them to today, or roll them on. When fewer are due: pull in reviews due within a week, or do more new problems. Leave days and missed days are spread out instead of piling up. Multi-practice comes on top.
 
@@ -724,7 +728,11 @@ npm run build
 | 弱专题（比自己的平均答好率低 15 个百分点以上） | 复习间隔缩短约三分之一，排题优先 |
 | 正常排期、下次复习在 60 天以后、最近 2 次答好 | 显示为已掌握 |
 
-**两种模式：** 学习模式按 70% 新题 / 30% 复习拆分每天的题量（入门、按题单学新知识）；刷题模式按 50% / 50%（刷公司题单、准备面试）。每天的总题量取你最近 14 个做题日的平均（新用户 10 题），也可以填固定数字，自动值只升不降。新题由你自己在 LeetCode 上挑，弹窗显示配额和进度（如「新题 2/7 · 复习 1/3」）。
+**三种模式：** 学习模式按 70% 新题 / 30% 复习拆分每天的题量（入门、按题单学新知识）；刷题模式按 50% / 50%（刷公司题单、准备面试）。每天的总题量取你最近 14 个做题日的平均（新用户 10 题），也可以填固定数字，自动值只升不降。新题由你自己在 LeetCode 上挑，弹窗显示配额和进度（如「新题 2/7 · 复习 1/3」）。
+
+**自由模式**不规定新题数量，想做多少做多少；系统改为每天推荐复习量：从你最近的复习节奏起步（新用户 5 道），最近一周把推荐且能做的复习基本做完（≥95%）就 +10%，完成不到 70% 就 −10%。
+
+**预计多久全部会做：** 每种模式下，弹窗都会按今天的复习量估算截至昨天做过的所有题什么时候全部「会做」（最近一次评「正常/简单」，且不在短期加强、一天多练或排队中），并给出想在 3 个月内完成每天需要复习几道。估算用你自己最近 90 天的数据：评差之后下一次答好的比例、每道薄弱题还需要连续答好几次，以及已会的题保持住需要的复习量（其中约 10% 会忘、需要重新加强）。
 
 **每日计划：** 复习题按遗忘风险挑选（负荷：简单 1 / 中等 2 / 困难 3），装满复习名额为止，单个专题最多占 40%。到期复习比名额多时，弹窗问你加进今天还是顺延；比名额少时，问你提前复习一周内到期的题还是多做新题。请假和漏签的积压会被摊开，一天多练另算。
 

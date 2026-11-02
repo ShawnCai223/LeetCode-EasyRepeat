@@ -9,6 +9,7 @@ import '../algorithms/fsrs_logic.js';
 import '../algorithms/reinforcement.js';
 import '../algorithms/load_balancer.js';
 import '../algorithms/topic_mastery.js';
+import '../algorithms/forecast.js';
 import '../shared/storage.js';
 import '../algorithms/vector_db.js';
 import '../content/skill_graph.js';

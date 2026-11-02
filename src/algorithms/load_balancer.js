@@ -4,8 +4,11 @@
  * FSRS / reinforcement decide *when a problem becomes due*. This planner decides
  * *which day you actually do it*, within a daily budget:
  *
- * - Two modes split the day's problems between new and review:
- *   learning (学习模式) 70% new / 30% review, grinding (刷题模式) 50% / 50%.
+ * - Three modes. Learning (学习模式) and grinding (刷题模式) split the day's
+ *   problems 70/30 and 50/50 between new and review. Free (自由模式): new
+ *   problems are up to the user (no quota); reviews follow a recommended
+ *   number that floats with how the user has been doing (±10% a day when
+ *   they kept up / fell behind over the last week).
  *   The total follows the user's real pace (average problems a day over their
  *   last 14 active days; 10 for new users) or a number they set. Reviews get
  *   their share as the review budget; new problems are the user's own picks,
@@ -169,11 +172,70 @@
 
     const MODES = {
         learn: { newShare: 0.7 },
-        grind: { newShare: 0.5 }
+        grind: { newShare: 0.5 },
+        free: { newShare: null }
     };
 
     function normalizeMode(mode) {
-        return mode === 'grind' ? 'grind' : 'learn';
+        return mode === 'grind' || mode === 'free' ? mode : 'learn';
+    }
+
+    /** Average reviews a day (problems seen before, multi-practice excluded) over the last 14 active days. */
+    function reviewPace(problems, today, options = {}) {
+        const opt = { ...DEFAULTS, ...options };
+        const todayKey = toKey(today);
+        const earliest = startOfDay(today).getTime() - opt.lookbackDays * DAY_MS;
+        const perDay = new Map();
+        for (const p of Object.values(problems || {})) {
+            if (!p) continue;
+            const dates = sortedDates((p.history || []).filter(h => h && !h.extra));
+            const seen = new Set();
+            for (let i = 1; i < dates.length; i++) {
+                const key = toKey(dates[i]);
+                if (dates[i].getTime() < earliest || key >= todayKey || seen.has(key) || key === toKey(dates[0])) continue;
+                seen.add(key);
+                perDay.set(key, (perDay.get(key) || 0) + 1);
+            }
+        }
+        const recent = Array.from(perDay.entries()).sort((a, b) => (a[0] < b[0] ? 1 : -1)).slice(0, opt.windowDays);
+        if (!recent.length) return { avg: null, activeDays: 0 };
+        return { avg: recent.reduce((sum, [, n]) => sum + n, 0) / recent.length, activeDays: recent.length };
+    }
+
+    /**
+     * Free mode: today's recommended number of reviews.
+     * Starts from the user's review pace (5 for new users). Each day it looks at
+     * the last 7 days in `dayLog` ({date: {rec, available, done}}): kept up
+     * (done ≥ 95% of what was recommended and available) → +10%; fell behind
+     * (< 70%) → −10%. Between 3 and 60.
+     */
+    function recommendReviews(problems, today, previous, dayLog = {}, options = {}) {
+        const opt = { ...DEFAULTS, ...options };
+        const todayKey = toKey(today);
+        let rec = Number(previous);
+        if (!(rec > 0)) {
+            const pace = reviewPace(problems, today, opt);
+            rec = pace.activeDays >= opt.minActiveDays ? Math.round(pace.avg) : 5;
+        }
+        const weekAgo = new Date(startOfDay(today));
+        weekAgo.setDate(weekAgo.getDate() - 7);
+        const fromKey = toKey(weekAgo);
+        const days = Object.entries(dayLog || {})
+            .filter(([k]) => k < todayKey && k >= fromKey)
+            .map(([, v]) => v || {});
+        let expected = 0;
+        let done = 0;
+        for (const d of days) {
+            const possible = Math.min(Number(d.rec) || 0, Number(d.available) || 0);
+            expected += possible;
+            done += Math.min(Number(d.done) || 0, possible);
+        }
+        if (expected >= 3) {
+            const ratio = done / expected;
+            if (ratio >= 0.95) rec = Math.ceil(rec * 1.1);
+            else if (ratio < 0.7) rec = Math.floor(rec * 0.9);
+        }
+        return Math.min(60, Math.max(3, rec));
     }
 
     /**
@@ -213,6 +275,11 @@
         const opt = { ...DEFAULTS, ...options };
         const mode = normalizeMode(settings && settings.mode);
         const avgWeight = averageWeight(problems);
+        if (mode === 'free') {
+            // Reviews only; the caller passes today's recommendation (recommendReviews).
+            const reviewQuota = Math.max(1, Math.round(Number(opt.recommendedReviews) || 5));
+            return { mode, total: null, newQuota: null, reviewQuota, reviewCapacity: Math.max(1, Math.round(reviewQuota * avgWeight)), avgWeight, source: 'recommended' };
+        }
         const fixed = Number(settings && settings.dailyProblems);
         let total;
         let source;
@@ -515,6 +582,8 @@
         doneToday,
         paceProblems,
         dailyBudget,
+        reviewPace,
+        recommendReviews,
         MODES,
         broadTags,
         mainTopic,

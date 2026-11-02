@@ -238,3 +238,55 @@ describe('planReviews', () => {
         expect(max).toBeLessThanOrEqual(plan.capacity);
     });
 });
+
+describe('free mode: recommended reviews float with what got done', () => {
+    // Each problem: first solved 30 days ago, reviewed on the given day offsets.
+    const reviewed = (offsets, slug) => mk('Medium', 30, {
+        slug,
+        history: [{ date: dayAt(-30).toISOString(), rating: 3 }, ...offsets.map(o => ({ date: dayAt(o).toISOString(), rating: 3 }))]
+    });
+    const reviewsPerDay = (perDay, days) => {
+        const list = [];
+        for (let i = 1; i <= days; i++) for (let k = 0; k < perDay; k++) list.push(reviewed([-i], `r${i}-${k}`));
+        return toMap(list);
+    };
+    const log = (entries) => Object.fromEntries(entries.map(([offset, v]) => [LB.toKey(dayAt(offset)), v]));
+
+    test('no new-problem quota; reviews = recommendation', () => {
+        const b = LB.dailyBudget({}, today, { mode: 'free' }, 0, { recommendedReviews: 8 });
+        expect(b).toMatchObject({ mode: 'free', total: null, newQuota: null, reviewQuota: 8, source: 'recommended' });
+        expect(b.reviewCapacity).toBe(16);
+    });
+
+    test('review pace counts reviews only (not first solves, not extra practice)', () => {
+        const problems = reviewsPerDay(6, 10);
+        problems.first = mk('Easy', 3, { slug: 'first', history: [{ date: dayAt(-1).toISOString(), rating: 3 }] });
+        problems.extra = reviewed([], 'extra');
+        problems.extra.history.push({ date: dayAt(-1).toISOString(), rating: 1, extra: true });
+        expect(LB.reviewPace(problems, today)).toMatchObject({ avg: 6, activeDays: 10 });
+    });
+
+    test('starts at 5 for new users, else from the review pace', () => {
+        expect(LB.recommendReviews({}, today, 0, {})).toBe(5);
+        expect(LB.recommendReviews(reviewsPerDay(12, 3), today, 0, {})).toBe(5);
+        expect(LB.recommendReviews(reviewsPerDay(12, 8), today, 0, {})).toBe(12);
+    });
+
+    test('+10% when nearly everything recommended and possible got done', () => {
+        const dayLog = log([[-1, { rec: 10, available: 12, done: 10 }], [-2, { rec: 10, available: 6, done: 6 }]]);
+        expect(LB.recommendReviews({}, today, 10, dayLog)).toBe(11);
+    });
+
+    test('−10% when under 70% got done; unchanged in between', () => {
+        expect(LB.recommendReviews({}, today, 10, log([[-1, { rec: 10, available: 10, done: 5 }]]))).toBe(9);
+        expect(LB.recommendReviews({}, today, 10, log([[-1, { rec: 10, available: 10, done: 8 }]]))).toBe(10);
+    });
+
+    test('only the last 7 days before today count; small samples and today are ignored; clamped 3..60', () => {
+        const old = log([[-9, { rec: 10, available: 10, done: 0 }], [0, { rec: 10, available: 10, done: 0 }]]);
+        expect(LB.recommendReviews({}, today, 10, old)).toBe(10);
+        expect(LB.recommendReviews({}, today, 10, log([[-1, { rec: 10, available: 2, done: 0 }]]))).toBe(10);
+        expect(LB.recommendReviews({}, today, 3, log([[-1, { rec: 3, available: 3, done: 0 }]]))).toBe(3);
+        expect(LB.recommendReviews({}, today, 60, log([[-1, { rec: 60, available: 60, done: 60 }]]))).toBe(60);
+    });
+});

@@ -1,7 +1,5 @@
 const DR = require('../src/algorithms/daily_reviews.js');
-const fsrs = require('../src/algorithms/fsrs_logic.js');
-const Relearn = require('../src/algorithms/relearn.js');
-const deps = { fsrs, Relearn };
+const S = require('../src/algorithms/schedule.js');
 
 const today = new Date('2026-11-04T09:00:00');
 const at = (offset, hour = 10) => {
@@ -11,20 +9,13 @@ const at = (offset, hour = 10) => {
     return d.toISOString();
 };
 const key = (offset) => DR.toKey(new Date(at(offset)));
-// First done 30 days ago, then reviewed on the given days (rating 3 unless given as [offset, rating]).
-const reviewed = (offsets, extra = {}) => ({
-    history: [{ date: at(-30), rating: 3 }, ...offsets.map(o => (Array.isArray(o) ? { date: at(o[0]), rating: o[1] } : { date: at(o), rating: 3 }))],
-    ...extra
-});
-const perDay = (n, days) => {
+const reviewed = (offsets) => ({ history: [{ date: at(-40), rating: 3 }, ...offsets.map(o => ({ date: at(o), rating: 3 }))] });
+// n problems reviewed on each of the given day offsets
+const reviewsOnDays = (n, offsets) => {
     const map = {};
-    for (let d = 1; d <= days; d++) for (let k = 0; k < n; k++) map[`p${d}-${k}`] = reviewed([-d], { nextReviewDate: at(400) });
+    offsets.forEach((o, i) => { for (let k = 0; k < n; k++) map[`p${i}-${k}`] = reviewed([o]); });
     return map;
 };
-// A known problem (stable, good last time) due on `dueOffset`.
-const known = (dueOffset, stability = 30) => reviewed([-10], {
-    nextReviewDate: at(dueOffset), fsrs_state: 'Review', fsrs_stability: stability, fsrs_difficulty: 5, fsrs_last_review: at(-10)
-});
 
 describe('counting reviews', () => {
     test('first attempts and same-day repeats are not reviews', () => {
@@ -36,117 +27,62 @@ describe('counting reviews', () => {
         expect(DR.reviewsOn(problems, key(-1))).toBe(2);
     });
 
-    test('pace = average over the last 14 active days before today', () => {
-        const problems = perDay(6, 20);
-        problems.t = reviewed([0]);
-        expect(DR.reviewPace(problems, today)).toEqual({ avg: 6, activeDays: 14 });
+    test('pace = average on the days you reviewed (skipped days ignored)', () => {
+        const problems = reviewsOnDays(12, [-1, -5, -9]);
+        expect(DR.reviewPace(problems, today)).toEqual({ avg: 12, activeDays: 3 });
     });
 });
 
-describe('transition rates', () => {
-    test('defaults with little history; measured from consecutive ratings otherwise', () => {
-        expect(DR.transitionRates({}, today)).toEqual({ afterGood: 0.75, afterBad: 0.4 });
-        const problems = {};
-        for (let i = 0; i < 10; i++) problems[`gb${i}`] = reviewed([[-5, 1]]);           // good → bad
-        for (let i = 0; i < 10; i++) problems[`bg${i}`] = reviewed([[-6, 1], [-3, 3]]); // good → bad → good
-        const r = DR.transitionRates(problems, today);
-        expect(r.afterGood).toBeCloseTo(0.1, 6); // 0 of 20 good-after-good, clamped to 0.1
-        expect(r.afterBad).toBeCloseTo(0.95, 6); // 10 of 10, clamped
-    });
-});
-
-describe('projected load', () => {
-    test('nothing due within 14 days → 0', () => {
-        expect(DR.projectLoad({ a: known(30) }, today, deps).total).toBe(0);
+describe("today's number", () => {
+    test('starts from the pace, or 8 with no history; bounded by the maximum', () => {
+        expect(DR.today({}, today, null, null)).toMatchObject({ target: 8, max: 15, changed: true });
+        expect(DR.today(reviewsOnDays(12, [-1, -3]), today, null, null).target).toBe(12);
+        expect(DR.today(reviewsOnDays(28, [-1, -3]), today, null, null).target).toBe(15);
+        expect(DR.today(reviewsOnDays(28, [-1, -3]), today, null, { max: 20 }).target).toBe(20);
     });
 
-    test('a known problem due today counts at least once, plus the chance it is forgotten and relearned', () => {
-        const r = DR.projectLoad({ a: known(0, 60) }, today, deps);
-        expect(r.total).toBeGreaterThanOrEqual(1);
-        expect(r.total).toBeLessThan(3); // default 75% good → 25% × (1/3/7 steps)
+    test('+1 after a day you finished, unchanged otherwise', () => {
+        const state = { algo: 'ramp1', date: key(-2), target: 10 };
+        expect(DR.today(reviewsOnDays(10, [-2]), today, state, null)).toMatchObject({ target: 11, changed: true });
+        expect(DR.today(reviewsOnDays(6, [-2]), today, state, null).target).toBe(10);
+        expect(DR.today(reviewsOnDays(15, [-2]), today, { ...state, target: 15 }, null).target).toBe(15);
     });
 
-    test('overdue problems count from today', () => {
-        expect(DR.projectLoad({ a: known(-20, 60) }, today, deps).total).toBeGreaterThanOrEqual(1);
+    test('computed once a day; a lower maximum applies right away', () => {
+        const state = { algo: 'ramp1', date: key(0), target: 12 };
+        expect(DR.today({}, today, state, null)).toMatchObject({ target: 12, changed: false });
+        expect(DR.today({}, today, state, { max: 8 }).target).toBe(8);
     });
 
-    test('a weak problem comes back several times within 14 days', () => {
-        const weak = reviewed([[-1, 1]], { nextReviewDate: at(0), relearn: { step: 0 }, fsrs_state: 'Review', fsrs_stability: 1, fsrs_difficulty: 8, fsrs_last_review: at(-1) });
-        expect(DR.projectLoad({ w: weak }, today, deps).total).toBeGreaterThan(DR.projectLoad({ a: known(0, 60) }, today, deps).total);
-    });
-
-    test('repeatable for the same data', () => {
-        const problems = { a: known(0, 3), b: known(2, 5), c: known(5, 2) };
-        expect(DR.projectLoad(problems, today, deps).total).toBe(DR.projectLoad(problems, today, deps).total);
-    });
-});
-
-describe('recommendation', () => {
-    test('expected reviews ÷ 14, rounded up, at least 3', () => {
-        const problems = {};
-        for (let i = 0; i < 70; i++) problems[`k${i}`] = known(i % 14, 60);
-        const r = DR.recommend(problems, today, deps);
-        expect(r.need).toBeGreaterThanOrEqual(5);
-        expect(r.recommended).toBe(Math.max(3, Math.ceil(DR.projectLoad(problems, today, deps).perDay)));
-        expect(DR.recommend({}, today, deps).recommended).toBe(3);
-    });
-
-    test('reports the recent pace alongside', () => {
-        expect(DR.recommend(perDay(8, 3), today, deps).pace).toBe(8);
-        expect(DR.recommend({}, today, deps).pace).toBeNull();
-    });
-});
-
-describe('today', () => {
-    test('computed once a day, then reused', () => {
-        const problems = { a: known(0, 60) };
-        const first = DR.today(problems, today, { date: key(-1), recommended: 30 }, null, deps);
-        expect(first.changed).toBe(true);
-        expect(first.state.date).toBe(key(0));
-        const again = DR.today(problems, today, first.state, null, deps);
-        expect(again).toMatchObject({ recommended: first.recommended, changed: false, fill: true });
-    });
-
-    test('a number stored today by an older version is recomputed', () => {
-        const r = DR.today({}, today, { date: key(0), recommended: 14, dayLog: {} }, null, deps);
-        expect(r).toMatchObject({ recommended: 3, changed: true });
-        expect(r.state.algo).toBe('load14');
-    });
-
-    test('a fixed number wins; fill can be turned off', () => {
-        const r = DR.today({}, today, { date: key(0), algo: 'load14', recommended: 9, need: 9 }, { fixed: 4, fill: false }, deps);
-        expect(r).toMatchObject({ recommended: 4, fixed: true, fill: false, need: 9 });
+    test('state from the older algorithm starts over from the pace; older `fixed` reads as the maximum', () => {
+        expect(DR.today(reviewsOnDays(9, [-1]), today, { algo: 'load14', date: key(0), recommended: 29 }, null).target).toBe(9);
+        expect(DR.maxOf({ fixed: 10 })).toBe(10);
+        expect(DR.maxOf({ max: 99 })).toBe(15);
     });
 });
 
 describe('split', () => {
-    const step = (p) => (p.relearn ? p.relearn.step : null);
-    const due = [
-        { slug: 'old', nextReviewDate: at(-10) },
-        { slug: 'r1', nextReviewDate: at(0), relearn: { step: 1 } },
-        { slug: 'mid', nextReviewDate: at(-3) },
-        { slug: 'r0', nextReviewDate: at(-1), relearn: { step: 0 } }
-    ];
+    const P = (slug, offset, sched) => ({ slug, nextReviewDate: at(offset), ...(sched ? { sched } : {}) });
 
-    test('short-term reviews first, then longest overdue; the rest is later', () => {
-        const s = DR.split(due, [], 3, { stepOf: step });
-        expect(s.today.map(p => p.slug)).toEqual(['r0', 'r1', 'old']);
-        expect(s.later.map(p => p.slug)).toEqual(['mid']);
-        expect(s.early).toEqual([]);
-        expect(DR.split(due, [], -2, { stepOf: step }).today).toEqual([]);
+    test('daily practice (at most 5, oldest first), then confirm, then longest overdue', () => {
+        const due = [
+            P('n-old', -6), P('n-new', 0), P('c1', 0, { mode: 'confirm', rung: 0 }),
+            ...[1, 2, 3, 4, 5, 6].map(i => P(`d${i}`, 0, { mode: 'daily', rung: 0, since: at(-i) }))
+        ];
+        const s = DR.split(due, 20, S.phase);
+        expect(s.today.map(p => p.slug)).toEqual(['d6', 'd5', 'd4', 'd3', 'd2', 'c1', 'n-old', 'n-new']);
+        expect(s.restCount).toBe(1);
     });
 
-    test('fewer due than recommended → filled with the soonest due, never relearn or reviewed today', () => {
-        const upcoming = [
-            { slug: 'in3', nextReviewDate: at(3) },
-            { slug: 'in1', nextReviewDate: at(1) },
-            { slug: 'relearnSoon', nextReviewDate: at(1), relearn: { step: 1 } },
-            { slug: 'doneToday', nextReviewDate: at(1), history: [{ date: at(0, 8), rating: 1 }] },
-            { slug: 'in2', nextReviewDate: at(2) }
-        ];
-        const s = DR.split(due, upcoming, 6, { stepOf: step, todayKey: key(0) });
-        expect(s.today.map(p => p.slug)).toEqual(['r0', 'r1', 'old', 'mid', 'in1', 'in2']);
-        expect(s.early.map(p => p.slug)).toEqual(['in1', 'in2']);
-        expect(DR.split(due, upcoming, 6, { stepOf: step, fill: false }).today).toHaveLength(4);
+    test('at most 5 confirm-day problems before the normal ones; the rest only if there is room', () => {
+        const due = [P('n1', -1), ...[1, 2, 3, 4, 5, 6, 7].map(i => P(`c${i}`, -8 + i, { mode: 'confirm', rung: 0 }))];
+        expect(DR.split(due, 6, S.phase).today.map(p => p.slug)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'n1']);
+        expect(DR.split(due, 8, S.phase).today.map(p => p.slug)).toEqual(['c1', 'c2', 'c3', 'c4', 'c5', 'n1', 'c6', 'c7']);
+    });
+
+    test('cut to what is left for today', () => {
+        const due = [P('a', -3), P('b', -2), P('c', -1)];
+        expect(DR.split(due, 2, S.phase).today.map(p => p.slug)).toEqual(['a', 'b']);
+        expect(DR.split(due, -1, S.phase).today).toEqual([]);
     });
 });

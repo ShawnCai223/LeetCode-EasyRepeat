@@ -16,7 +16,7 @@ It automatically tracks your submissions (both Accepted and Wrong Answer), sched
 
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-green?logo=google-chrome)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
-![Version](https://img.shields.io/badge/version-2.1.0-orange)
+![Version](https://img.shields.io/badge/version-3.0.0-orange)
 
 ## 🚀 Quick Setup
 
@@ -116,8 +116,10 @@ For Cloud LLM:
 ## 🗓️ Review Planning (ShawnCai223 fork)
 
 - **Fixed FSRS.** The original code used the wrong FSRS v4.5 weights, so rating *Again* on a problem you used to know made the next interval longer (e.g. 7 → 11 → 16 days). Now *Again* shortens it, as FSRS intends.
-- **Hard or Again → review after 1, 3 and 7 days.** *Good/Easy* moves the problem a step on; *Hard/Again* during these steps goes back one step. After the 7-day step it returns to the normal FSRS schedule. Cards show the step (e.g. RELEARN 2/3) and short-term reviews come first in the list.
-- **A recommended number of reviews a day, from the load ahead.** New problems are not limited. The number = reviews expected over the next 14 days ÷ 14: problems already due or due within 14 days, plus the times they come back inside the window (1/3/7-day steps after Hard/Again), estimated with how often your own reviews came out good over the last 90 days. When fewer are due today, the list is filled with the problems due soonest (marked EARLY) to even out the days; this can be turned off, and the number can be fixed, in Settings. The popup also shows your recent average when it is well below what is needed.
+- **Three ratings, by whether you could write it yourself:** *Tough* (couldn't, or only with hints), *Fine* (wrote it, but slow or shaky), *Easy* (wrote it smoothly).
+  - *Tough* → practise it every day until a day you don't rate it Tough, then one more day to confirm; after that it goes back to the normal schedule. Cards show DAILY / CONFIRM.
+  - *Fine* → again in 2 days. *Easy* → the gap roughly doubles: 3, 7, 15, 30, 60 days. Fine steps the gap back one; Tough starts it over.
+- **Reviews a day you can keep up with.** New problems are not limited. The number starts from what you have been doing (your average on the days you reviewed), goes up by 1 after a day you finished them all, and never goes above your maximum (Settings, default 15). Each day: at most 5 problems in daily practice and 5 on their confirm day, then the longest overdue. What doesn't fit comes up on the next days — no backlog count is shown, only today's list and how many problems you can do.
 - **Open N due problems at once, editor reset automatically.** The popup opens the first N of today's reviews in background tabs; each one's code editor is reset when the page loads.
 - **Leave.** A leave day shifts every scheduled review back one day and keeps the streak. Weekly and monthly quotas (week = Sunday–Saturday); missed days can be back-dated within quota; the quota can be set once at any time, then only changed on the 1st of a month.
 
@@ -699,8 +701,10 @@ npm run build
 ## 🗓️ 复习规划（ShawnCai223 fork）
 
 - **修好的 FSRS：** 原代码的 FSRS v4.5 参数位置用错了，本来会的题评「重来」反而让下次间隔变长（比如 7 → 11 → 16 天）。现在评「重来」会缩短间隔。
-- **答差就隔 1、3、7 天各复习一次：** 评「困难」或「重来」后，隔 1 天、3 天、7 天各复习一次；评「正常/简单」进入下一步，中途又评差退回一步；7 天那一步过了回到正常的 FSRS 排期。卡片上显示进度（如「加强 2/3」），这类题排在列表最前面。
-- **每天一个推荐复习量（按未来的负荷算）：** 新题不限量。推荐量 = 未来 14 天预计的复习次数 ÷ 14：统计已经到期和 14 天内到期的题，加上它们在这 14 天里还会回来的次数（评差后隔 1、3、7 天），用你最近 90 天自己答好的比例来估计。今天到期的不够时，用最快要到期的题补满（标「提前复习」），让每天的量更平均；在设置里可以关掉补满，也可以固定每天的数量。需要量明显高于你最近的平均时，弹窗会把两个数都显示出来。
+- **三档评分，按能不能自己写出来：** 不会（写不出来或要看提示）、勉强（写出来了，但卡壳或有 bug）、熟练（自己顺利写出来）。
+  - 不会：每天都练，直到某天不再评「不会」，再练一天确认，之后回到正常间隔。卡片上显示「每天练」「再练一天」。
+  - 勉强：两天后再做。熟练：间隔大约翻倍——3、7、15、30、60 天。评「勉强」间隔退回一档，评「不会」从头开始。
+- **每天做得完的复习量：** 新题不限量。复习量从你平时做得到的量起步（你复习那些天的平均），某天全部做完后第二天 +1，不超过你设的上限（设置里，默认 15）。每天最多 5 道「每天练」、5 道「再练一天」，其余按逾期最久的排。放不下的题会排到后面几天；不显示积压数字，只显示今天的这几道和已会做多少道。
 - **一次打开 N 道题并自动重置：** 弹窗在后台标签页打开今天前 N 道复习题，页面加载后自动重置代码编辑器。
 - **请假：** 请假当天所有待复习题目整体顺延一天，连续天数不中断。有每周、每月额度（一周按周日到周六）；漏掉的日子在额度内可以补请；额度首次可随时设一次，之后只能在每月 1 号修改。
 

@@ -158,14 +158,18 @@
             nextStep = calcFn(currentProblem.interval, currentProblem.repetition, currentProblem.easeFactor);
         }
 
-        // Hard/Again: short-term review after 1, 3, 7 days (see relearn.js).
-        const RL = typeof Relearn !== 'undefined' ? Relearn : (typeof global !== 'undefined' ? global.Relearn : undefined);
-        const relearnFields = rating && RL ? RL.fields(currentProblem, rating, now, nextStep.nextReviewDate) : {};
-        if (relearnFields.nextReviewDate) nextStep.nextReviewDate = relearnFields.nextReviewDate;
+        // Review date from the three-tier rules (see schedule.js); FSRS keeps
+        // its stability/difficulty for the retention shown on the cards.
+        const SCH = typeof Schedule !== 'undefined' ? Schedule : (typeof global !== 'undefined' ? global.Schedule : undefined);
+        const scheduleFields = rating && SCH ? SCH.fields(currentProblem, rating, now) : {};
+        if (scheduleFields.nextReviewDate) {
+            nextStep.nextReviewDate = scheduleFields.nextReviewDate;
+            nextStep.nextInterval = scheduleFields.interval;
+        }
 
         problems[problemKey] = {
             ...currentProblem,
-            ...relearnFields,
+            ...scheduleFields,
             difficulty: difficulty,
             lastSolved: nowISO,
             interval: nextStep.nextInterval,

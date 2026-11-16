@@ -1,49 +1,42 @@
 /**
  * LeetCode EasyRepeat - Review settings card on the options page:
- * how reviews are scheduled, and the daily review number (auto or fixed).
+ * how reviews are scheduled, and the daily maximum.
  *
  * Self-contained like leave_settings.js: own strings, follows `uiLanguage`.
  */
-import '../algorithms/fsrs_logic.js';
-import '../algorithms/relearn.js';
+import '../algorithms/schedule.js';
 import '../algorithms/daily_reviews.js';
 
 const STRINGS = {
     en: {
         heading: '🔁 Reviews',
         rules: [
-            'Reviews are scheduled with FSRS v4.5 from your rating (Again / Hard / Good / Easy).',
-            'Hard or Again: the problem comes back after 1 day, then 3, then 7. Good/Easy moves it on a step; Hard/Again during these steps goes back one step. After the 7-day step it returns to the normal schedule.',
-            'New problems are not limited. Reviews get a recommended number a day: the reviews expected over the next 14 days ÷ 14. It counts problems already due or due within 14 days, plus the times they come back inside the window (1/3/7-day steps after Hard/Again), using how often your own reviews came out good over the last 90 days. Recomputed once a day.',
-            'When fewer problems are due today than recommended, the list is filled with the ones due soonest (marked EARLY), which evens out the days. Due problems beyond the number stay listed under "Show all due".'
+            'Rate each solve by whether you could write it yourself: Tough (couldn\'t, or only with hints), Fine (wrote it, but slow or shaky), Easy (wrote it smoothly).',
+            'Tough: practise it every day until a day you don\'t rate it Tough, then one more day to confirm; after that it goes back to the normal schedule. At most 5 problems in daily practice and 5 on their confirm day come up on the same day.',
+            'Fine: again in 2 days. Easy: the gap roughly doubles — 3, 7, 15, 30, 60 days. Fine steps the gap back one; Tough starts it over.',
+            'Reviews a day start from what you have been doing (your average on the days you reviewed) and go up by 1 after a day you finished them all, never above your maximum. New problems are not limited. Problems that don\'t fit today come up on the next days; the backlog isn\'t shown.'
         ],
-        fill_label: 'Fill today with problems due soon when fewer are due',
-        fixed_label: 'Reviews a day (blank = recommended automatically)',
-        fixed_hint: 'A whole number from 1 to 60 sets it; leave blank to let it float.',
+        max_label: 'Most reviews a day',
+        max_hint: 'A whole number from 3 to 60 (default 15).',
         save: 'Save',
         saved: '✅ Saved.',
-        invalid: 'Enter a whole number from 1 to 60, or leave it blank.',
-        today_auto: 'Today: {rec} reviews recommended (about {need} a day expected over the next 14 days).',
-        today_fixed: 'Today: {rec} reviews (your number; about {need} a day expected over the next 14 days).',
-        pace: 'Your recent average: {pace} reviews a day.'
+        invalid: 'Enter a whole number from 3 to 60.',
+        today: 'Today: {target} reviews (most {max}).'
     },
     zh: {
         heading: '🔁 复习',
         rules: [
-            '复习时间按 FSRS v4.5 根据你的评分（重来 / 困难 / 正常 / 简单）计算。',
-            '评「困难」或「重来」：隔 1 天、3 天、7 天各复习一次。评「正常/简单」进入下一步，中途又评差就退回一步。7 天那一步过了就回到正常排期。',
-            '新题不限量。复习每天有一个推荐量：未来 14 天预计的复习次数 ÷ 14。统计已经到期和 14 天内到期的题，加上它们在这 14 天里还会回来的次数（评差后隔 1、3、7 天），用你最近 90 天自己答好的比例来估计。每天重算一次。',
-            '今天到期的题比推荐量少时，用最快要到期的题补满（标「提前复习」），让每天的量更平均。超出推荐量的到期题点「显示全部到期」可以看到。'
+            '做完一道题，按能不能自己写出来评分：不会（写不出来或要看提示）、勉强（写出来了，但卡壳或有 bug）、熟练（自己顺利写出来）。',
+            '不会：每天都练，直到某天不再评「不会」，再练一天确认，之后回到正常间隔。每天最多 5 道「每天练」、5 道「再练一天」。',
+            '勉强：两天后再做。熟练：间隔大约翻倍——3、7、15、30、60 天。评「勉强」间隔退回一档，评「不会」从头开始。',
+            '每天复习量从你平时做得到的量起步（你复习那些天的平均），某天全部做完后第二天 +1，不超过你设的上限。新题不限量。今天放不下的题会排到后面几天，不显示积压。'
         ],
-        fill_label: '到期的题不够推荐量时，用快到期的题补满',
-        fixed_label: '每天复习量（留空 = 自动推荐）',
-        fixed_hint: '填 1 到 60 的整数就固定为这个数；留空则自动浮动。',
+        max_label: '每天最多复习',
+        max_hint: '3 到 60 的整数（默认 15）。',
         save: '保存',
         saved: '✅ 已保存。',
-        invalid: '请输入 1 到 60 的整数，或者留空。',
-        today_auto: '今天：建议复习 {rec} 道（未来 14 天预计每天约 {need} 道）。',
-        today_fixed: '今天：复习 {rec} 道（你设定的；未来 14 天预计每天约 {need} 道）。',
-        pace: '你最近平均每天复习 {pace} 道。'
+        invalid: '请输入 3 到 60 的整数。',
+        today: '今天：复习 {target} 道（最多 {max} 道）。'
     }
 };
 
@@ -70,12 +63,11 @@ function buildCard() {
         <ul class="hint" id="rv-rules" style="margin: 6px 0 12px; padding-left: 18px;"></ul>
         <div class="grid" style="gap: 15px;">
             <div class="field">
-                <label for="rv-fixed" data-rv="fixed_label"></label>
-                <input type="number" id="rv-fixed" min="1" max="60" step="1">
-                <span class="hint" data-rv="fixed_hint"></span>
+                <label for="rv-max" data-rv="max_label"></label>
+                <input type="number" id="rv-max" min="3" max="60" step="1">
+                <span class="hint" data-rv="max_hint"></span>
             </div>
         </div>
-        <label style="display:block; font-weight:normal; margin:10px 0 0;"><input type="checkbox" id="rv-fill"> <span data-rv="fill_label"></span></label>
         <div class="actions">
             <button id="rv-save-btn" class="btn" data-rv="save"></button>
             <span id="rv-save-status" class="status-text"></span>
@@ -95,17 +87,12 @@ async function render(card) {
         rules.appendChild(li);
     }
     const state = await chrome.storage.local.get({ problems: {}, dailyReviews: null, dailyReviewSettings: null });
-    const input = card.querySelector('#rv-fixed');
-    const fixed = Number(state.dailyReviewSettings && state.dailyReviewSettings.fixed);
-    if (document.activeElement !== input) input.value = Number.isInteger(fixed) && fixed > 0 ? String(fixed) : '';
-    card.querySelector('#rv-fill').checked = !(state.dailyReviewSettings && state.dailyReviewSettings.fill === false);
     const D = DR();
-    if (D) {
-        const day = D.today(state.problems || {}, new Date(), state.dailyReviews, state.dailyReviewSettings);
-        let text = t(day.fixed ? 'today_fixed' : 'today_auto', { rec: day.recommended, need: day.need });
-        if (day.pace) text += ' ' + t('pace', { pace: day.pace });
-        card.querySelector('#rv-today').textContent = text;
-    }
+    if (!D) return;
+    const input = card.querySelector('#rv-max');
+    if (document.activeElement !== input) input.value = String(D.maxOf(state.dailyReviewSettings));
+    const day = D.today(state.problems || {}, new Date(), state.dailyReviews, state.dailyReviewSettings);
+    card.querySelector('#rv-today').textContent = t('today', { target: day.target, max: day.max });
 }
 
 async function init() {
@@ -127,26 +114,16 @@ async function init() {
 
     card.querySelector('#rv-save-btn').addEventListener('click', async () => {
         const status = card.querySelector('#rv-save-status');
-        const raw = card.querySelector('#rv-fixed').value.trim();
-        const n = Number(raw);
-        if (raw !== '' && (!Number.isInteger(n) || n < 1 || n > 60)) {
+        const n = Number(card.querySelector('#rv-max').value.trim());
+        if (!Number.isInteger(n) || n < 3 || n > 60) {
             status.textContent = t('invalid');
             status.className = 'status-text error';
             return;
         }
-        const cur = (await chrome.storage.local.get({ dailyReviewSettings: {} })).dailyReviewSettings || {};
-        await chrome.storage.local.set({ dailyReviewSettings: { ...cur, fixed: raw === '' ? null : n } });
+        await chrome.storage.local.set({ dailyReviewSettings: { max: n } });
         status.textContent = t('saved');
         status.className = 'status-text success';
         await render(card);
-    });
-
-    card.querySelector('#rv-fill').addEventListener('change', async (e) => {
-        const cur = (await chrome.storage.local.get({ dailyReviewSettings: {} })).dailyReviewSettings || {};
-        await chrome.storage.local.set({ dailyReviewSettings: { ...cur, fill: e.target.checked } });
-        const status = card.querySelector('#rv-save-status');
-        status.textContent = t('saved');
-        status.className = 'status-text success';
     });
 
     chrome.storage.onChanged?.addListener((changes, area) => {

@@ -26,7 +26,6 @@ let currentLeave = { leaveDays: [], settings: null, isLeaveToday: false };
 let currentBatchSize = 3;
 let currentVisibleProblems = [];
 let currentPlan = null;
-let showAllDue = false;
 
 const LEETCODE_HOSTS = new Set(['leetcode.com', 'leetcode.cn']);
 
@@ -189,73 +188,48 @@ async function openReviewTabs(problemList) {
 /* ------------------------------------------------------------------ */
 
 /**
- * Today's recommended number of reviews (expected reviews over the next 14
- * days ÷ 14, computed once a day) and today's list: due problems, filled with
- * the ones due soonest when fewer are due than recommended.
+ * Today's number of reviews (starts from what you have been doing, +1 after
+ * a day you finished, never above your maximum) and today's list: daily
+ * practice (at most 5), confirm days, then the longest overdue. Nothing about
+ * the backlog is shown.
  */
 async function computeDailyPlan(problemMap, dueProblems) {
     const DR = window.DailyReviews;
     if (!DR) return null;
-    const RL = window.Relearn;
+    const SCH = window.Schedule;
     const now = new Date();
     const stored = await chrome.storage.local.get({ dailyReviews: null, dailyReviewSettings: null });
     const day = DR.today(problemMap, now, stored.dailyReviews, stored.dailyReviewSettings);
     if (day.changed) await chrome.storage.local.set({ dailyReviews: day.state });
-    const todayKey = DR.toKey(now);
-    const done = DR.reviewsOn(problemMap, todayKey);
-    const endOfToday = getCurrentDate();
-    const dueSlugs = new Set(dueProblems.map(p => p.slug));
-    const upcoming = currentLeave.isLeaveToday ? [] : Object.values(problemMap).filter(p =>
-        p && !dueSlugs.has(p.slug) && new Date(p.nextReviewDate) > endOfToday
-        && new Date(p.nextReviewDate) - endOfToday < DR.HORIZON * 86400000);
-    const parts = DR.split(dueProblems, upcoming, day.recommended - done, {
-        stepOf: RL ? RL.currentStep : undefined,
-        fill: day.fill,
-        todayKey
-    });
+    const done = DR.reviewsOn(problemMap, DR.toKey(now));
+    const parts = DR.split(dueProblems, day.target - done, SCH ? SCH.phase : undefined);
+    const attempted = Object.values(problemMap).filter(p => p && Array.isArray(p.history) && p.history.some(h => Number(h.rating) >= 1));
     return {
-        recommended: day.recommended,
-        fixed: day.fixed,
-        need: day.need,
-        pace: day.pace,
+        target: day.target,
         done,
         today: parts.today,
-        later: parts.later,
-        early: parts.early
+        canDo: SCH ? attempted.filter(SCH.canDo).length : null,
+        total: attempted.length
     };
 }
 
-function setupPlanBar() {
-    const button = document.getElementById('btn-plan-toggle');
-    if (!button) return;
-    button.addEventListener('click', () => {
-        showAllDue = !showAllDue;
-        void updateDashboard();
-    });
-}
+function setupPlanBar() {}
 
 function renderPlanBar() {
     const bar = document.getElementById('plan-bar');
     const status = document.getElementById('plan-status');
-    const button = document.getElementById('btn-plan-toggle');
-    if (!bar || !status || !button) return;
+    if (!bar || !status) return;
     const p = currentPlan;
     if (!p || currentView !== 'dashboard') {
         bar.style.display = 'none';
         return;
     }
     bar.style.display = 'flex';
-    const left = p.today.length;
-    let text = t(p.fixed ? 'popup_plan_line_fixed' : 'popup_plan_line', { rec: p.recommended, done: p.done, left });
-    if (p.early.length) text += ` · ${t('popup_plan_early', { count: p.early.length })}`;
-    if (p.later.length) text += ` · ${t('popup_plan_more', { count: p.later.length })}`;
-    const lines = [text];
-    if (p.pace && p.need && (p.fixed ? Math.abs(p.need - p.recommended) >= 3 : p.need >= p.pace * 1.2)) {
-        lines.push(t('popup_plan_need', { need: Math.ceil(p.need), pace: Math.round(p.pace) }));
-    }
+    const lines = [p.done >= p.target || !p.today.length
+        ? t('popup_plan_done', { done: p.done })
+        : t('popup_plan_line', { target: p.target, done: p.done, left: p.today.length })];
+    if (p.canDo !== null && p.total) lines.push(t('popup_plan_progress', { can: p.canDo, total: p.total }));
     status.innerText = lines.join('\n');
-    button.style.display = p.later.length ? '' : 'none';
-    button.innerText = showAllDue ? t('popup_plan_show_today') : t('popup_plan_show_all');
 }
 
 /* ------------------------------------------------------------------ */
@@ -576,7 +550,7 @@ async function updateDashboard() {
     console.log('[Popup][DIAG] updateDashboard: due =', dueProblems.length, ', all =', problems.length);
 
     currentPlan = await computeDailyPlan(problemMap, dueProblems);
-    currentDueProblems = currentPlan && !showAllDue ? currentPlan.today : (currentPlan ? [...currentPlan.today, ...currentPlan.later] : dueProblems);
+    currentDueProblems = currentPlan ? currentPlan.today : dueProblems;
     currentAllProblems = problems;
     currentTitleCache = result.localizedProblemTitles || {};
 
@@ -645,8 +619,7 @@ function rerenderCurrentView() {
         titleCache: currentTitleCache,
         problemUrlBase: currentLeetCodeBase,
         // GO from the due queue opens the problem as a review (editor auto-reset)
-        onGo: isDashboard ? (problem) => { void openReviewTabs([problem]); } : undefined,
-        earlySlugs: isDashboard && currentPlan ? new Set(currentPlan.early.map(e => e.slug)) : null
+        onGo: isDashboard ? (problem) => { void openReviewTabs([problem]); } : undefined
     });
     updateQueueTitle();
     renderPlanBar();
@@ -966,13 +939,16 @@ async function updateProblemSRS(slug, ease) {
         nextStep = calculateNextReview(problem.interval, problem.repetition, ease, now);
     }
 
-    // Hard/Again: short-term review after 1, 3, 7 days (see relearn.js).
-    const relearnFields = window.Relearn ? window.Relearn.fields(problem, rating, now, nextStep.nextReviewDate) : {};
-    if (relearnFields.nextReviewDate) nextStep.nextReviewDate = relearnFields.nextReviewDate;
+    // Review date from the three-tier rules (see schedule.js).
+    const scheduleFields = window.Schedule ? window.Schedule.fields(problem, rating, now) : {};
+    if (scheduleFields.nextReviewDate) {
+        nextStep.nextReviewDate = scheduleFields.nextReviewDate;
+        nextStep.nextInterval = scheduleFields.interval;
+    }
 
     problems[slug] = {
         ...problem,
-        ...relearnFields,
+        ...scheduleFields,
         interval: nextStep.nextInterval,
         repetition: nextStep.nextRepetition,
         easeFactor: nextStep.nextEaseFactor,

@@ -1,4 +1,4 @@
-/** saveSubmission applies the 1/3/7 relearn steps on top of FSRS. */
+/** saveSubmission takes the review date from the three-tier rules (schedule.js). */
 let stored;
 global.chrome = {
     runtime: { id: 'mock' },
@@ -9,19 +9,19 @@ global.chrome = {
 };
 global.showCompletionToast = jest.fn();
 global.fsrs = require('../src/algorithms/fsrs_logic.js');
-global.Relearn = require('../src/algorithms/relearn.js');
+global.Schedule = require('../src/algorithms/schedule.js');
 const { saveSubmission } = require('../src/shared/storage.js');
 
 const daysAhead = (iso) => Math.round((new Date(iso) - Date.now()) / 864e5);
 
-describe('saveSubmission + relearn', () => {
+describe('saveSubmission + schedule', () => {
     beforeEach(() => {
         jest.useFakeTimers().setSystemTime(new Date('2026-11-04T10:00:00'));
         stored = { problems: {} };
     });
     afterEach(() => jest.useRealTimers());
 
-    test('Again on a known problem → back in 1 day, relearn step 0', async () => {
+    test('Tough on a known problem → back tomorrow, daily practice', async () => {
         stored.problems['two-sum'] = {
             slug: 'two-sum', title: 'Two Sum', difficulty: 'Easy', interval: 20, repetition: 3, easeFactor: 2.5,
             fsrs_state: 'Review', fsrs_stability: 20, fsrs_difficulty: 5,
@@ -30,14 +30,15 @@ describe('saveSubmission + relearn', () => {
         };
         await saveSubmission('Two Sum', 'two-sum', 'Easy', 'manual_api_scan', 1);
         const p = stored.problems['two-sum'];
-        expect(p.relearn).toEqual({ step: 0 });
+        expect(p.sched.mode).toBe('daily');
         expect(daysAhead(p.nextReviewDate)).toBe(1);
     });
 
-    test('Good on a new problem → plain FSRS', async () => {
+    test('Fine on a new problem → in 2 days', async () => {
         await saveSubmission('Two Sum', 'two-sum', 'Easy', 'manual_api_scan', 3);
         const p = stored.problems['two-sum'];
-        expect(p.relearn).toBeNull();
-        expect(daysAhead(p.nextReviewDate)).toBe(p.interval);
+        expect(p.sched).toMatchObject({ mode: 'normal' });
+        expect(daysAhead(p.nextReviewDate)).toBe(2);
+        expect(p.interval).toBe(2);
     });
 });

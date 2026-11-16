@@ -312,24 +312,25 @@ describe('Rating Modal - Click Handler Guard', () => {
 
     // Test: enabled button click should resolve the modal with correct value
     test('clicking an enabled button resolves the modal with its rating value', async () => {
-        // maxRating=2 means Again(1) and Hard(2) are enabled
+        // maxRating=2 means only Tough(1) is enabled (three tiers: 1, 3, 4)
         const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
 
         // Wait for async modal construction
         await new Promise(r => setTimeout(r, 10));
 
-        // Find the Hard button (value 2, should be enabled)
-        const hardBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-hard')
+        // Find the Tough button (value 1, should be enabled)
+        const toughBtn = createdElements.find(el =>
+            el.className && el.className.includes('rating-btn-again')
         );
-        expect(hardBtn).toBeDefined();
-        expect(hardBtn.disabled).toBeFalsy();
+        expect(toughBtn).toBeDefined();
+        expect(toughBtn.disabled).toBeFalsy();
+        expect(createdElements.some(el => el.className && el.className.includes('rating-btn-hard'))).toBe(false);
 
-        // Click the enabled button — should resolve the promise with value 2
-        hardBtn.click();
+        // Click the enabled button — should resolve the promise with value 1
+        toughBtn.click();
 
         const result = await promise;
-        expect(result).toBe(2);
+        expect(result).toBe(1);
     });
 
     // Test: when stored preference is false, all buttons should be enabled regardless of maxRating

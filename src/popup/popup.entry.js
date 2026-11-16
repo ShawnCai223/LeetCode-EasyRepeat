@@ -6,7 +6,7 @@ import '../shared/leave_logic.js';
 import '../shared/review_reset.js';
 console.log('[Popup Entry] Config loaded, window.THEMES:', typeof window !== 'undefined' ? window.THEMES : 'N/A');
 import '../algorithms/fsrs_logic.js';
-import '../algorithms/relearn.js';
+import '../algorithms/schedule.js';
 import '../algorithms/daily_reviews.js';
 import '../shared/storage.js';
 import '../algorithms/vector_db.js';

@@ -329,8 +329,8 @@
                     btnContainer.classList.add('lc-rating-btn-container-ramp');
 
                     const ratings = [
+                        // Three tiers (see schedule.js): tough → daily practice, fine → 2 days, easy → 3/7/15/30/60.
                         { tone: 'again', label: translate('rating_again', {}, language), value: 1, desc: translate('rating_again_desc', {}, language) },
-                        { tone: 'hard', label: translate('rating_hard', {}, language), value: 2, desc: translate('rating_hard_desc', {}, language) },
                         { tone: 'good', label: translate('rating_good', {}, language), value: 3, desc: translate('rating_good_desc', {}, language) },
                         { tone: 'easy', label: translate('rating_easy', {}, language), value: 4, desc: translate('rating_easy_desc', {}, language) }
                     ];

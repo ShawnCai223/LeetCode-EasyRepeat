@@ -16,7 +16,7 @@ It automatically tracks your submissions (both Accepted and Wrong Answer), sched
 
 ![Chrome Extension](https://img.shields.io/badge/Chrome-Extension-green?logo=google-chrome)
 ![Manifest V3](https://img.shields.io/badge/Manifest-V3-blue)
-![Version](https://img.shields.io/badge/version-3.0.0-orange)
+![Version](https://img.shields.io/badge/version-3.1.0-orange)
 
 ## 🚀 Quick Setup
 
@@ -116,9 +116,9 @@ For Cloud LLM:
 ## 🗓️ Review Planning (ShawnCai223 fork)
 
 - **Fixed FSRS.** The original code used the wrong FSRS v4.5 weights, so rating *Again* on a problem you used to know made the next interval longer (e.g. 7 → 11 → 16 days). Now *Again* shortens it, as FSRS intends.
-- **Three ratings, by whether you could write it yourself:** *Tough* (couldn't, or only with hints), *Fine* (wrote it, but slow or shaky), *Easy* (wrote it smoothly).
-  - *Tough* → practise it every day until a day you don't rate it Tough, then one more day to confirm; after that it goes back to the normal schedule. Cards show DAILY / CONFIRM.
-  - *Fine* → again in 2 days. *Easy* → the gap roughly doubles: 3, 7, 15, 30, 60 days. Fine steps the gap back one; Tough starts it over.
+- **Three ratings, by what happened this time:** *Couldn't* (couldn't write it, or used hints), *Stuck* (got it, but got stuck or fixed bugs a few times), *Solved* (wrote it yourself, fairly smoothly). The rating window highlights a suggestion from your submissions — *Solved* if accepted on the first try, *Stuck* if there were wrong submissions — and Enter picks it; nothing is disabled.
+  - *Couldn't* → practise it every day until a day you don't rate it Couldn't, then one more day to confirm; after that it goes back to the normal schedule. Cards show DAILY / CONFIRM.
+  - *Stuck* → again in 2 days. *Solved* → the gap roughly doubles: 3, 7, 15, 30, 60 days. Stuck steps the gap back one; Couldn't starts it over.
 - **Reviews a day you can keep up with.** New problems are not limited. The number starts from what you have been doing (your average on the days you reviewed), goes up by 1 after a day you finished them all, and never goes above your maximum (Settings, default 15). Each day: at most 5 problems in daily practice and 5 on their confirm day, then the longest overdue. What doesn't fit comes up on the next days — no backlog count is shown, only today's list and how many problems you can do.
 - **Open N due problems at once, editor reset automatically.** The popup opens the first N of today's reviews in background tabs; each one's code editor is reset when the page loads.
 - **Leave.** A leave day shifts every scheduled review back one day and keeps the streak. Weekly and monthly quotas (week = Sunday–Saturday); missed days can be back-dated within quota; the quota can be set once at any time, then only changed on the 1st of a month.
@@ -701,9 +701,9 @@ npm run build
 ## 🗓️ 复习规划（ShawnCai223 fork）
 
 - **修好的 FSRS：** 原代码的 FSRS v4.5 参数位置用错了，本来会的题评「重来」反而让下次间隔变长（比如 7 → 11 → 16 天）。现在评「重来」会缩短间隔。
-- **三档评分，按能不能自己写出来：** 不会（写不出来或要看提示）、勉强（写出来了，但卡壳或有 bug）、熟练（自己顺利写出来）。
+- **三档评分，按这次的实际情况：** 不会（写不出来，或看了提示）、卡壳（写出来了，但卡了很久或改了好几次 bug）、写出来了（自己写出来，过程比较顺）。评分窗口会按你的提交给出建议并高亮：一次就通过建议「写出来了」，提交错过建议「卡壳」，按回车就选中；不会禁用任何按钮。
   - 不会：每天都练，直到某天不再评「不会」，再练一天确认，之后回到正常间隔。卡片上显示「每天练」「再练一天」。
-  - 勉强：两天后再做。熟练：间隔大约翻倍——3、7、15、30、60 天。评「勉强」间隔退回一档，评「不会」从头开始。
+  - 卡壳：两天后再做。写出来了：间隔大约翻倍——3、7、15、30、60 天。评「卡壳」间隔退回一档，评「不会」从头开始。
 - **每天做得完的复习量：** 新题不限量。复习量从你平时做得到的量起步（你复习那些天的平均），某天全部做完后第二天 +1，不超过你设的上限（设置里，默认 15）。每天最多 5 道「每天练」、5 道「再练一天」，其余按逾期最久的排。放不下的题会排到后面几天；不显示积压数字，只显示今天的这几道和已会做多少道。
 - **一次打开 N 道题并自动重置：** 弹窗在后台标签页打开今天前 N 道复习题，页面加载后自动重置代码编辑器。
 - **请假：** 请假当天所有待复习题目整体顺延一天，连续天数不中断。有每周、每月额度（一周按周日到周六）；漏掉的日子在额度内可以补请；额度首次可随时设一次，之后只能在每月 1 号修改。

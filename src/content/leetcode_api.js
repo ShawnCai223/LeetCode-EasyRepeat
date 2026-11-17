@@ -206,16 +206,18 @@
 
                 // Read fail count from active session to cap the rating
                 let maxRating = 4;
+                let failCount = 0;
                 try {
                     const sessResult = await chrome.storage.local.get({ activeSession: null });
                     const sess = sessResult.activeSession;
                     if (sess && sess.slug === slug) {
+                        failCount = Number(sess.failCount) || 0;
                         if (sess.failCount >= 3) maxRating = 2;
                         else if (sess.failCount >= 1) maxRating = 3;
                     }
                 } catch (e) { /* ignore */ }
 
-                const rating = await showRatingModal(details.title, { slug, maxRating });
+                const rating = await showRatingModal(details.title, { slug, maxRating, failCount });
                 const result = await saveSubmission(details.title, details.slug, details.difficulty, 'manual_api_scan', rating, details.topics);
 
                 // Clear the active session
@@ -336,16 +338,18 @@
 
                             // Read fail count from active session to cap the rating
                             let maxRating = 4;
+                            let failCount = 0;
                             try {
                                 const sessResult = await chrome.storage.local.get({ activeSession: null });
                                 const sess = sessResult.activeSession;
                                 if (sess && sess.slug === slug) {
+                                    failCount = Number(sess.failCount) || 0;
                                     if (sess.failCount >= 3) maxRating = 2;
                                     else if (sess.failCount >= 1) maxRating = 3;
                                 }
                             } catch (e) { /* ignore */ }
 
-                            const rating = await showRatingModal(finalTitle, { slug, maxRating });
+                            const rating = await showRatingModal(finalTitle, { slug, maxRating, failCount });
                             await saveSubmission(finalTitle, slug, finalDifficulty, 'api_poll', rating, finalTopics);
 
                             // Clear the active session

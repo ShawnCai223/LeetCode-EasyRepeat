@@ -663,3 +663,30 @@
 .lc-tooltip-close:hover {
     background: rgba(0, 0, 0, 0.2);
 }
+
+/* Suggested rating (from this submission): highlighted, focused, small badge */
+.lc-rating-btn.lc-rating-btn-suggested {
+    position: relative;
+    box-shadow: 0 0 0 2px currentColor;
+}
+.lc-rating-btn.lc-rating-btn-suggested::after {
+    content: attr(data-suggested-label);
+    position: absolute;
+    top: -9px;
+    right: 8px;
+    padding: 1px 6px;
+    font-size: 10px;
+    letter-spacing: 0.04em;
+    background: currentColor;
+    border-radius: 3px;
+}
+.lc-rating-btn.lc-rating-btn-suggested::after {
+    color: inherit;
+    -webkit-text-fill-color: #111;
+}
+.lc-rating-reason {
+    margin-top: 10px;
+    font-size: 12px;
+    opacity: 0.8;
+    text-align: center;
+}

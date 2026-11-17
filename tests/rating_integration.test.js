@@ -258,388 +258,90 @@ describe('Rating Integration Flow', () => {
  * Focused tests for showRatingModal click handler behavior.
  * Uses callback-style chrome.storage.local.get mock to match resolveModalTheme's API.
  */
-describe('Rating Modal - Click Handler Guard', () => {
-    let showRatingModal;
-    let modalElements;
-
-    beforeEach(() => {
-        jest.resetModules();
-        modalElements = [];
-
-        // Override chrome.storage.local.get to support callback style (used by resolveModalTheme)
-        global.chrome.storage.local.get = jest.fn((defaults, callback) => {
-            // If callback provided, invoke it synchronously with defaults (callback style)
-            if (typeof callback === 'function') {
-                callback(typeof defaults === 'object' ? defaults : {});
-                return;
-            }
-            // Otherwise return promise (promise style)
-            return Promise.resolve(typeof defaults === 'object' ? defaults : {});
-        });
-
-        // Track created elements for inspection
-        createdElements.length = 0;
-
-        // Re-require content_ui to pick up fresh mocks
-        const contentUi = require('../src/content/content_ui.js');
-        showRatingModal = contentUi.showRatingModal;
-    });
-
-    // Test: disabled button click should NOT resolve the modal (guard prevents it)
-    test('clicking a disabled button does not resolve the modal', async () => {
-        // maxRating=2 means Good(3) and Easy(4) are disabled
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-
-        // Wait for async modal construction
-        await new Promise(r => setTimeout(r, 10));
-
-        // Find the Easy button (value 4, should be disabled)
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-        expect(easyBtn).toBeDefined();
-        expect(easyBtn.disabled).toBe(true);
-
-        // Click the disabled button — should NOT resolve the promise
-        easyBtn.click();
-
-        // Verify the modal backdrop was NOT removed (modal still open)
-        const backdrop = createdElements.find(el =>
-            el.className && el.className.includes('lc-rating-backdrop')
-        );
-        expect(backdrop.remove).not.toHaveBeenCalled();
-    });
-
-    // Test: enabled button click should resolve the modal with correct value
-    test('clicking an enabled button resolves the modal with its rating value', async () => {
-        // maxRating=2 means only Tough(1) is enabled (three tiers: 1, 3, 4)
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-
-        // Wait for async modal construction
-        await new Promise(r => setTimeout(r, 10));
-
-        // Find the Tough button (value 1, should be enabled)
-        const toughBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-again')
-        );
-        expect(toughBtn).toBeDefined();
-        expect(toughBtn.disabled).toBeFalsy();
-        expect(createdElements.some(el => el.className && el.className.includes('rating-btn-hard'))).toBe(false);
-
-        // Click the enabled button — should resolve the promise with value 1
-        toughBtn.click();
-
-        const result = await promise;
-        expect(result).toBe(1);
-    });
-
-    // Test: when stored preference is false, all buttons should be enabled regardless of maxRating
-    test('stored difficultyRecommendations=false enables all buttons despite maxRating', async () => {
-        // Override storage mock to return difficultyRecommendations=false
-        global.chrome.storage.local.get = jest.fn((defaults, callback) => {
-            if (typeof callback === 'function') {
-                // Merge defaults with our override: recommendations disabled
-                const result = typeof defaults === 'object' ? { ...defaults } : {};
-                result.difficultyRecommendations = false;
-                callback(result);
-                return;
-            }
-            return Promise.resolve(typeof defaults === 'object' ? defaults : {});
-        });
-
-        // Re-require to pick up new mock
-        jest.resetModules();
-        createdElements.length = 0;
-        const contentUi = require('../src/content/content_ui.js');
-        showRatingModal = contentUi.showRatingModal;
-
-        // maxRating=2 would normally disable Good(3) and Easy(4)
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-        await new Promise(r => setTimeout(r, 10));
-
-        // Easy button should be ENABLED because recommendations are disabled
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-        expect(easyBtn).toBeDefined();
-        expect(easyBtn.disabled).toBeFalsy();
-
-        // Good button should also be ENABLED
-        const goodBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-good')
-        );
-        expect(goodBtn).toBeDefined();
-        expect(goodBtn.disabled).toBeFalsy();
-    });
-
-    // Test: when stored preference is true (default), maxRating restrictions apply normally
-    test('stored difficultyRecommendations=true keeps maxRating restrictions', async () => {
-        // Storage returns default (true) — recommendations enabled
-        global.chrome.storage.local.get = jest.fn((defaults, callback) => {
-            if (typeof callback === 'function') {
-                const result = typeof defaults === 'object' ? { ...defaults } : {};
-                // difficultyRecommendations defaults to true, no override needed
-                callback(result);
-                return;
-            }
-            return Promise.resolve(typeof defaults === 'object' ? defaults : {});
-        });
-
-        jest.resetModules();
-        createdElements.length = 0;
-        const contentUi = require('../src/content/content_ui.js');
-        showRatingModal = contentUi.showRatingModal;
-
-        // maxRating=2 should disable Good(3) and Easy(4)
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-        await new Promise(r => setTimeout(r, 10));
-
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-        expect(easyBtn).toBeDefined();
-        expect(easyBtn.disabled).toBe(true);
-    });
-});
-
-/**
- * Tests for the difficulty recommendations checkbox toggle inside the rating modal.
- * Verifies: checkbox creation, toggle enable/disable, and storage persistence.
- */
-describe('Rating Modal - Recommendations Checkbox Toggle', () => {
+describe('Rating Modal - suggestion from this submission', () => {
     let showRatingModal;
 
-    beforeEach(() => {
+    const setup = (stored = {}) => {
         jest.resetModules();
         createdElements.length = 0;
-
-        // Callback-style mock that returns defaults (difficultyRecommendations defaults to true)
+        // Callback-style storage mock (used by resolveModalTheme and the preference read)
         global.chrome.storage.local.get = jest.fn((defaults, callback) => {
-            if (typeof callback === 'function') {
-                callback(typeof defaults === 'object' ? { ...defaults } : {});
-                return;
-            }
-            return Promise.resolve(typeof defaults === 'object' ? defaults : {});
+            const result = { ...(typeof defaults === 'object' ? defaults : {}), ...stored };
+            if (typeof callback === 'function') { callback(result); return; }
+            return Promise.resolve(result);
         });
         global.chrome.storage.local.set = jest.fn();
+        showRatingModal = require('../src/content/content_ui.js').showRatingModal;
+    };
+    const find = (cls) => createdElements.find(el => el.className && el.className.includes(cls));
+    const findAll = (cls) => createdElements.filter(el => el.className && el.className.includes(cls));
+    const tick = () => new Promise(r => setTimeout(r, 10));
 
-        const contentUi = require('../src/content/content_ui.js');
-        showRatingModal = contentUi.showRatingModal;
+    beforeEach(() => setup());
+
+    test('three buttons: Couldn\'t (1), Stuck (3), Solved (4); no Hard', async () => {
+        showRatingModal('Two Sum', { slug: 'two-sum', failCount: 0 });
+        await tick();
+        expect(find('rating-btn-again')).toBeDefined();
+        expect(find('rating-btn-good')).toBeDefined();
+        expect(find('rating-btn-easy')).toBeDefined();
+        expect(find('rating-btn-hard')).toBeUndefined();
     });
 
-    // Test: checkbox element exists in the modal with correct default state
-    test('checkbox is created with id lc-difficulty-rec and default checked=true', async () => {
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 3 });
-        await new Promise(r => setTimeout(r, 10));
+    test('accepted on the first try → Solved is suggested', async () => {
+        showRatingModal('Two Sum', { slug: 'two-sum', failCount: 0 });
+        await tick();
+        const suggested = findAll('lc-rating-btn-suggested');
+        expect(suggested).toHaveLength(1);
+        expect(suggested[0].className).toContain('rating-btn-easy');
+        expect(find('lc-rating-reason').innerText).toMatch(/first try|content_rating_reason_clean/);
+    });
 
-        // Find the checkbox input by id
-        const checkbox = createdElements.find(el =>
-            el.tagName === 'INPUT' && el.type === 'checkbox' && el.id === 'lc-difficulty-rec'
-        );
-        expect(checkbox).toBeDefined();
-        // Default: recommendations enabled = checked
+    test('wrong submissions → Stuck is suggested, and nothing is disabled', async () => {
+        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2, failCount: 4 });
+        await tick();
+        const suggested = findAll('lc-rating-btn-suggested');
+        expect(suggested).toHaveLength(1);
+        expect(suggested[0].className).toContain('rating-btn-good');
+        expect(find('lc-rating-reason').innerText).toMatch(/4 wrong|content_rating_reason_fails/);
+        const solved = find('rating-btn-easy');
+        expect(solved.disabled).toBeFalsy();
+        solved.click();
+        await expect(promise).resolves.toBe(4);
+    });
+
+    test('older callers without failCount: maxRating < 4 suggests Stuck', async () => {
+        showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 3 });
+        await tick();
+        expect(findAll('lc-rating-btn-suggested')[0].className).toContain('rating-btn-good');
+    });
+
+    test('clicking a button resolves with its value', async () => {
+        const promise = showRatingModal('Two Sum', { slug: 'two-sum', failCount: 1 });
+        await tick();
+        find('rating-btn-again').click();
+        await expect(promise).resolves.toBe(1);
+    });
+
+    test('suggestions turned off (stored preference) → no highlight, no reason', async () => {
+        setup({ difficultyRecommendations: false });
+        showRatingModal('Two Sum', { slug: 'two-sum', failCount: 0 });
+        await tick();
+        expect(findAll('lc-rating-btn-suggested')).toHaveLength(0);
+        expect(find('lc-rating-reason').innerText).toBe('');
+    });
+
+    test('the checkbox toggles the highlight and saves the preference', async () => {
+        showRatingModal('Two Sum', { slug: 'two-sum', failCount: 0 });
+        await tick();
+        const checkbox = createdElements.find(el => el.tagName === 'INPUT' && el.id === 'lc-difficulty-rec');
         expect(checkbox.checked).toBe(true);
-    });
-
-    // Test: unchecking the toggle enables all previously disabled buttons
-    test('unchecking toggle enables all buttons regardless of maxRating', async () => {
-        // maxRating=2 disables Good(3) and Easy(4)
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-        await new Promise(r => setTimeout(r, 10));
-
-        // Verify Easy is initially disabled
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-        expect(easyBtn.disabled).toBe(true);
-
-        // Find checkbox and uncheck it
-        const checkbox = createdElements.find(el =>
-            el.tagName === 'INPUT' && el.id === 'lc-difficulty-rec'
-        );
-        checkbox.checked = false;
-        // Trigger the change event handler
-        checkbox._listeners['change']();
-
-        // Easy button should now be enabled
-        expect(easyBtn.disabled).toBe(false);
-        expect(easyBtn.style.opacity).toBe('');
-        expect(easyBtn.style.pointerEvents).toBe('');
-    });
-
-    // Test: re-checking the toggle re-applies maxRating restrictions
-    test('re-checking toggle re-disables restricted buttons', async () => {
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-        await new Promise(r => setTimeout(r, 10));
-
-        const checkbox = createdElements.find(el =>
-            el.tagName === 'INPUT' && el.id === 'lc-difficulty-rec'
-        );
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-
-        // Uncheck first
         checkbox.checked = false;
         checkbox._listeners['change']();
-        expect(easyBtn.disabled).toBe(false);
-
-        // Re-check — restrictions should re-apply
-        checkbox.checked = true;
-        checkbox._listeners['change']();
-        expect(easyBtn.disabled).toBe(true);
-        expect(easyBtn.style.opacity).toBe('0.35');
-    });
-
-    // Test: toggling the checkbox persists preference to chrome.storage.local
-    test('change event writes difficultyRecommendations to storage', async () => {
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 3 });
-        await new Promise(r => setTimeout(r, 10));
-
-        const checkbox = createdElements.find(el =>
-            el.tagName === 'INPUT' && el.id === 'lc-difficulty-rec'
-        );
-
-        // Uncheck — should write false
-        checkbox.checked = false;
-        checkbox._listeners['change']();
+        expect(findAll('lc-rating-btn-suggested')).toHaveLength(0);
         expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ difficultyRecommendations: false });
-
-        // Re-check — should write true
         checkbox.checked = true;
         checkbox._listeners['change']();
-        expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ difficultyRecommendations: true });
-    });
-});
-
-/**
- * End-to-end integration tests for the full difficulty recommendation toggle flow.
- * Simulates: restricted modal → user unchecks toggle → clicks Easy → verifies result.
- */
-describe('Rating Modal - E2E Toggle Override Flow', () => {
-    let showRatingModal;
-
-    beforeEach(() => {
-        jest.resetModules();
-        createdElements.length = 0;
-
-        // Default storage: recommendations enabled (true)
-        global.chrome.storage.local.get = jest.fn((defaults, callback) => {
-            if (typeof callback === 'function') {
-                callback(typeof defaults === 'object' ? { ...defaults } : {});
-                return;
-            }
-            return Promise.resolve(typeof defaults === 'object' ? defaults : {});
-        });
-        global.chrome.storage.local.set = jest.fn();
-
-        const contentUi = require('../src/content/content_ui.js');
-        showRatingModal = contentUi.showRatingModal;
-    });
-
-    // E2E: user overrides restriction via toggle and selects Easy (rating=4)
-    test('user unchecks toggle then clicks Easy, modal resolves with rating 4', async () => {
-        // maxRating=2 simulates 3+ failures: only Again(1) and Hard(2) enabled
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-        await new Promise(r => setTimeout(r, 10));
-
-        // Step 1: Verify Easy is initially disabled
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-        expect(easyBtn).toBeDefined();
-        expect(easyBtn.disabled).toBe(true);
-
-        // Step 2: User unchecks the recommendations toggle
-        const checkbox = createdElements.find(el =>
-            el.tagName === 'INPUT' && el.id === 'lc-difficulty-rec'
-        );
-        expect(checkbox).toBeDefined();
-        checkbox.checked = false;
-        checkbox._listeners['change']();
-
-        // Step 3: Easy should now be enabled
-        expect(easyBtn.disabled).toBe(false);
-
-        // Step 4: User clicks Easy
-        easyBtn.click();
-
-        // Step 5: Modal resolves with rating 4 (Easy)
-        const result = await promise;
-        expect(result).toBe(4);
-
-        // Step 6: Verify the toggle preference was persisted
-        expect(global.chrome.storage.local.set).toHaveBeenCalledWith({ difficultyRecommendations: false });
-    });
-
-    // E2E: user with stored preference=false sees all buttons enabled from the start
-    test('returning user with saved preference=false sees all buttons enabled', async () => {
-        // Override storage to return difficultyRecommendations=false
-        global.chrome.storage.local.get = jest.fn((defaults, callback) => {
-            if (typeof callback === 'function') {
-                const result = typeof defaults === 'object' ? { ...defaults } : {};
-                result.difficultyRecommendations = false; // Previously saved preference
-                callback(result);
-                return;
-            }
-            return Promise.resolve(typeof defaults === 'object' ? defaults : {});
-        });
-
-        // Re-require with new mock
-        jest.resetModules();
-        createdElements.length = 0;
-        const contentUi = require('../src/content/content_ui.js');
-        showRatingModal = contentUi.showRatingModal;
-
-        // maxRating=2 would normally disable Good and Easy
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 2 });
-        await new Promise(r => setTimeout(r, 10));
-
-        // Checkbox should be unchecked (matching stored preference)
-        const checkbox = createdElements.find(el =>
-            el.tagName === 'INPUT' && el.id === 'lc-difficulty-rec'
-        );
-        expect(checkbox).toBeDefined();
-        expect(checkbox.checked).toBe(false);
-
-        // All buttons should be enabled — no restrictions applied
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-        const goodBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-good')
-        );
-        expect(easyBtn.disabled).toBeFalsy();
-        expect(goodBtn.disabled).toBeFalsy();
-
-        // User clicks Good — modal resolves with rating 3
-        goodBtn.click();
-        const result = await promise;
-        expect(result).toBe(3);
-    });
-
-    // E2E: with maxRating=4 (no failures), toggle has no visible effect
-    test('toggle has no effect when maxRating=4 (no restrictions to begin with)', async () => {
-        const promise = showRatingModal('Two Sum', { slug: 'two-sum', maxRating: 4 });
-        await new Promise(r => setTimeout(r, 10));
-
-        // All buttons already enabled
-        const easyBtn = createdElements.find(el =>
-            el.className && el.className.includes('rating-btn-easy')
-        );
-        expect(easyBtn.disabled).toBeFalsy();
-
-        // Uncheck toggle — buttons should stay enabled (nothing to change)
-        const checkbox = createdElements.find(el =>
-            el.tagName === 'INPUT' && el.id === 'lc-difficulty-rec'
-        );
-        checkbox.checked = false;
-        checkbox._listeners['change']();
-        expect(easyBtn.disabled).toBe(false);
-
-        // Re-check toggle — still all enabled (maxRating=4 means no restrictions)
-        checkbox.checked = true;
-        checkbox._listeners['change']();
-        expect(easyBtn.disabled).toBe(false);
+        expect(findAll('lc-rating-btn-suggested')).toHaveLength(1);
     });
 });

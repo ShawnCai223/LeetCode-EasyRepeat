@@ -298,9 +298,13 @@
         return new Promise((resolve) => {
             resolveModalTheme((modalTheme) => {
                 const maxRating = options.maxRating || 4;
+                // Suggested rating from this submission: accepted on the first try →
+                // "Solved" (4); any wrong submission → "Stuck" (3). Nothing is disabled.
+                const failCount = Number.isInteger(options.failCount) ? options.failCount : null;
+                const suggested = options.suggested
+                    || (failCount !== null ? (failCount === 0 ? 4 : 3) : (maxRating >= 4 ? 4 : 3));
 
-                // Build the modal after reading the stored recommendation preference
-                // to avoid a visual flash where buttons appear disabled then re-enable
+                // Build the modal after reading the stored suggestion preference
                 const buildModal = (recEnabled) => {
                     const backdrop = document.createElement('div');
                     backdrop.className = 'lc-rating-backdrop';
@@ -329,29 +333,26 @@
                     btnContainer.classList.add('lc-rating-btn-container-ramp');
 
                     const ratings = [
-                        // Three tiers (see schedule.js): tough → daily practice, fine → 2 days, easy → 3/7/15/30/60.
+                        // Three tiers (see schedule.js): couldn't → daily practice, stuck → 2 days, solved → 3/7/15/30/60.
                         { tone: 'again', label: translate('rating_again', {}, language), value: 1, desc: translate('rating_again_desc', {}, language) },
                         { tone: 'good', label: translate('rating_good', {}, language), value: 3, desc: translate('rating_good_desc', {}, language) },
                         { tone: 'easy', label: translate('rating_easy', {}, language), value: 4, desc: translate('rating_easy_desc', {}, language) }
                     ];
+                    const suggestedLabel = (ratings.find(r => r.value === suggested) || ratings[2]).label;
 
-                    // Collect button references for the toggle to enable/disable dynamically
+                    // The line under the buttons saying why a rating is suggested
+                    const reason = document.createElement('div');
+                    reason.className = 'lc-rating-reason';
+                    const reasonText = failCount === null
+                        ? translate(suggested === 4 ? 'content_rating_reason_clean' : 'content_rating_reason_some', { label: suggestedLabel }, language)
+                        : translate(failCount === 0 ? 'content_rating_reason_clean' : 'content_rating_reason_fails', { count: failCount, label: suggestedLabel }, language);
+
                     const buttonRefs = [];
 
                     ratings.forEach(r => {
                         const btn = document.createElement('button');
                         btn.className = `lc-rating-btn rating-btn-${r.tone}`;
 
-                        // Only apply fail-count restrictions when recommendations are enabled
-                        if (recEnabled && r.value > maxRating) {
-                            btn.disabled = true;
-                            btn.classList.add('lc-rating-btn-disabled');
-                            btn.style.opacity = '0.35';
-                            btn.style.pointerEvents = 'none';
-                            btn.style.cursor = 'not-allowed';
-                        }
-
-                        // Construct button content
                         const labelDiv = document.createElement('div');
                         labelDiv.className = 'lc-rating-btn-label';
                         labelDiv.innerText = r.label;
@@ -363,31 +364,34 @@
                         btn.appendChild(labelDiv);
                         btn.appendChild(descDiv);
 
-                        // Always attach click handler; guard with disabled check inside
-                        // so that dynamically re-enabled buttons (via toggle) work without re-binding
                         btn.addEventListener('click', () => {
-                            if (!btn.disabled) {
-                                backdrop.remove();
-                                resolve(r.value);
-                            }
+                            backdrop.remove();
+                            resolve(r.value);
                         });
                         btnContainer.appendChild(btn);
-
-                        // Store reference for the checkbox toggle to use
-                        buttonRefs.push({ btn, value: r.value });
+                        buttonRefs.push({ btn, value: r.value, base: btn.className });
                     });
 
-                    // --- Difficulty Recommendations Toggle (checkbox below rating buttons) ---
+                    // Highlight the suggested button (and focus it, so Enter picks it)
+                    const applySuggestion = (on) => {
+                        buttonRefs.forEach(({ btn, value, base }) => {
+                            const isSuggested = on && value === suggested;
+                            btn.className = isSuggested ? `${base} lc-rating-btn-suggested` : base;
+                            if (btn.dataset) btn.dataset.suggestedLabel = isSuggested ? translate('content_rating_suggested', {}, language) : '';
+                            if (isSuggested && typeof btn.focus === 'function') setTimeout(() => btn.focus(), 0);
+                        });
+                        reason.innerText = on ? reasonText : '';
+                    };
+
+                    // --- Suggestion toggle (checkbox below the buttons) ---
                     const toggleContainer = document.createElement('div');
                     toggleContainer.className = 'lc-rating-recommendation-toggle';
 
-                    // Checkbox: controls whether fail-count restrictions are active
                     const checkbox = document.createElement('input');
                     checkbox.type = 'checkbox';
                     checkbox.id = 'lc-difficulty-rec';
-                    checkbox.checked = recEnabled; // Initial state matches stored preference
+                    checkbox.checked = recEnabled;
 
-                    // Label for the checkbox
                     const toggleLabel = document.createElement('label');
                     toggleLabel.htmlFor = 'lc-difficulty-rec';
                     toggleLabel.innerText = translate('content_difficulty_recommendations', {}, language);
@@ -395,35 +399,21 @@
                     toggleContainer.appendChild(checkbox);
                     toggleContainer.appendChild(toggleLabel);
 
-                    // Toggle change handler: enable/disable buttons and persist preference
                     checkbox.addEventListener('change', () => {
-                        buttonRefs.forEach(({ btn, value }) => {
-                            // Determine if this button should be disabled based on toggle state
-                            const shouldDisable = checkbox.checked && value > maxRating;
-                            btn.disabled = shouldDisable;
-                            if (shouldDisable) {
-                                btn.classList.add('lc-rating-btn-disabled');
-                                btn.style.opacity = '0.35';
-                                btn.style.pointerEvents = 'none';
-                                btn.style.cursor = 'not-allowed';
-                            } else {
-                                btn.classList.remove('lc-rating-btn-disabled');
-                                btn.style.opacity = '';
-                                btn.style.pointerEvents = '';
-                                btn.style.cursor = 'pointer';
-                            }
-                        });
-                        // Persist the preference to chrome.storage.local
+                        applySuggestion(checkbox.checked);
                         if (typeof chrome !== 'undefined' && chrome.runtime?.id && chrome.storage?.local) {
                             chrome.storage.local.set({ difficultyRecommendations: checkbox.checked });
                         }
                     });
 
+                    applySuggestion(recEnabled);
+
                     modal.appendChild(header);
                     modal.appendChild(sub);
                     modal.appendChild(hint);
                     modal.appendChild(btnContainer);
-                    modal.appendChild(toggleContainer); // Checkbox row below buttons
+                    modal.appendChild(reason);
+                    modal.appendChild(toggleContainer);
                     backdrop.appendChild(modal);
                     document.body.appendChild(backdrop);
                 }; // end buildModal

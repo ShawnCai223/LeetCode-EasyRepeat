@@ -1,10 +1,10 @@
 /**
  * LeetCode EasyRepeat - Review schedule (三档评分)
  *
- * Three ratings, by whether you could write it yourself:
- *   tough (1) — could not, or only with hints
- *   fine  (3) — wrote it yourself, but slowly / with bugs / can't explain it
- *   easy  (4) — wrote it yourself, smoothly
+ * Three ratings, by what happened this time (UI names in brackets):
+ *   tough (1) [Couldn't / 不会]     — couldn't write it, or used hints
+ *   fine  (3) [Stuck / 卡壳]        — got it, but got stuck or fixed bugs a few times
+ *   easy  (4) [Solved / 写出来了]   — wrote it yourself, fairly smoothly
  * (Older ratings: 2 "Hard" counts as tough.)
  *
  * Rules:

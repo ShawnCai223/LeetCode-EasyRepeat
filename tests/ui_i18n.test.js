@@ -100,8 +100,8 @@ describe('EasyRepeatI18n', () => {
         expect(zh).toHaveProperty('content_difficulty_recommendations');
 
         // Verify the exact translation values
-        expect(en.content_difficulty_recommendations).toBe('Enable difficulty recommendations');
-        expect(zh.content_difficulty_recommendations).toBe('启用难度推荐');
+        expect(en.content_difficulty_recommendations).toBe('Suggest a rating from this submission');
+        expect(zh.content_difficulty_recommendations).toBe('根据这次提交给出建议');
     });
 
     it('contains all required filter translation keys', () => {
